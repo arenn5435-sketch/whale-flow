@@ -638,6 +638,14 @@ def fetch_league_events(league: dict, hours_ahead: float = 24, hours_back: float
 
     run({"live": "true"})
     run({"start_time_min": _iso(lo), "start_time_max": _iso(hi)})
+    raw_found = len(seen)
+    if not seen and league.get("series"):
+        # tag returned nothing: some leagues (tennis tours) are keyed by series instead
+        base.pop("tag_id", None)
+        base["series_id"] = league["series"]
+        run({"live": "true"})
+        run({"start_time_min": _iso(lo), "start_time_max": _iso(hi)})
+        raw_found = len(seen)
 
     keep = []
     for ev in seen.values():
@@ -648,6 +656,9 @@ def fetch_league_events(league: dict, hours_ahead: float = 24, hours_back: float
             continue
         ev["_league"] = league
         keep.append(ev)
+    if not keep:
+        errors.append(f"{league['league']} ({league['sport']}): 0 games in window "
+                      f"(API returned {raw_found}; tag {league['league_tag']}, series {league.get('series')})")
     return keep, errors
 
 
