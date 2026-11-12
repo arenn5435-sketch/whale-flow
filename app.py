@@ -206,10 +206,11 @@ with tab_scan:
         sports = sorted({l["sport"] for l in leagues})
         with st.form("scan_form"):
             s1, s2 = st.columns(2)
-            pick_sports = s1.multiselect("Sports", sports, default=[x for x in sports if x in ("Basketball", "Football", "Hockey")][:3] or sports[:1])
+            pick_sports = s1.multiselect("Sports", sports, default=[x for x in sports if x in ("Basketball", "Football", "Hockey", "Tennis")] or sports[:1])
             league_opts = [l for l in leagues if l["sport"] in pick_sports] if pick_sports else leagues
             pick_leagues = s2.multiselect("Leagues (blank = all in the chosen sports)",
                                           [f"{l['sport']} · {l['league']}" for l in league_opts])
+            st.caption("Leagues are split out under each sport (e.g. Basketball · NBA, NCAAM, WNBA; Tennis · ATP, WTA).")
             a1, a2, a3, a4 = st.columns(4)
             ahead = a1.slider("Starting within (hours)", 1, 72, 24)
             back = a2.slider("Include started up to (hours ago)", 0, 12, 6)

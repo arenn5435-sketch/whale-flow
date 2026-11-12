@@ -58,7 +58,15 @@ CODE_SPORT = {
     "lol": "Esports", "cs2": "Esports", "dota2": "Esports", "val": "Esports",
     "atp": "Tennis", "wta": "Tennis", "liv": "Golf", "pga": "Golf", "f1": "Racing",
 }
-PREFIX_SPORT = (("cric", "Cricket"), ("vb", "Volleyball"), ("hb", "Handball"),
+# Readable league names (override the tag label, which can be generic or missing).
+LEAGUE_NAMES = {
+    "nba": "NBA", "wnba": "WNBA", "cbb": "NCAAM (men's college basketball)", "ncaab": "NCAAM (men's college basketball)",
+    "cwbb": "NCAAW (women's college basketball)", "nfl": "NFL", "cfb": "NCAAF (college football)", "mlb": "MLB",
+    "nhl": "NHL", "ufc": "UFC", "epl": "EPL", "lal": "La Liga", "bun": "Bundesliga", "ucl": "Champions League",
+    "mls": "MLS", "atp": "ATP (men's tennis)", "wta": "WTA (women's tennis)", "lol": "League of Legends",
+    "cs2": "Counter-Strike 2", "dota2": "Dota 2", "val": "Valorant",
+}
+PREFIX_SPORT = (("tennis", "Tennis"), ("itf", "Tennis"), ("challenger", "Tennis"), ("cwbb", "Basketball"), ("cric", "Cricket"), ("vb", "Volleyball"), ("hb", "Handball"),
                 ("ru", "Rugby"), ("nascar", "Racing"), ("indycar", "Racing"))
 
 
@@ -579,6 +587,8 @@ def list_leagues() -> list:
     for r in rows:
         tags = [t.strip() for t in str(r.get("tags") or "").split(",") if t.strip()]
         specific = [t for t in tags if t not in GENERIC_TAGS]
+        if not specific and tags and r.get("sport"):
+            specific = [tags[-1]]   # league only carries generic tags: still scan it
         if not specific or not r.get("sport"):
             continue
         sport_tag = next((t for t in specific if t in SPORT_TAG_HINTS), specific[0])
@@ -588,7 +598,7 @@ def list_leagues() -> list:
     labels = resolve_tag_labels({l["sport_tag"] for l in leagues} | {l["league_tag"] for l in leagues})
     for l in leagues:
         l["sport"] = _sport_for(l["code"], l["sport_tag"], labels)
-        l["league"] = labels.get(l["league_tag"]) or l["code"].upper()
+        l["league"] = LEAGUE_NAMES.get(l["code"].lower()) or labels.get(l["league_tag"]) or l["code"].upper()
     leagues.sort(key=lambda l: (l["sport"], l["league"]))
     return leagues
 
