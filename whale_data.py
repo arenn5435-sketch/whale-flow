@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 5
+DATA_VERSION = 6
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -188,7 +188,13 @@ def market_label(m: dict) -> str:
 # finding a game
 # ---------------------------------------------------------------------------
 
-def search_games(query: str, only_live: bool = False, limit_per_type: int = 10):
+def is_decided(prices, cutoff: float = 0.99) -> bool:
+    """True when a side is priced at 99c+ (or 1c-), i.e. the market is effectively settled."""
+    vals = [p for p in prices if p is not None]
+    return bool(vals) and (max(vals) >= cutoff or min(vals) <= 1 - cutoff)
+
+
+def search_games(query: str, only_live: bool = False, limit_per_type: int = 10, hide_decided: bool = False):
     """
     Search by text ("Cavaliers Pelicans") or paste a polymarket.com/event/<slug>
     link. Returns a flat list of annotated market dicts: live games first, then
@@ -212,6 +218,8 @@ def search_games(query: str, only_live: bool = False, limit_per_type: int = 10):
     for ev in events:
         for m in ev.get("markets") or []:
             if m.get("conditionId") and not m.get("closed"):
+                if hide_decided and is_decided(market_prices(m)):
+                    continue
                 out.append(annotate_market(m, ev))
     out.sort(key=lambda m: (not m.get("_event_live"), m.get("sportsMarketType") not in MAIN_MARKET_TYPES))
     return out
@@ -747,7 +755,7 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
 def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, depth_pages: int = 1,
                min_shares: float = 1.0, max_games: int = 40, workers: int = 8, tz: str = DEFAULT_TZ,
                progress=None, deepen_top: int = 0, deepen_pages: int = 10, status: str = "all",
-               market_types=("moneyline",)):
+               market_types=("moneyline",), hide_decided: bool = True):
     """
     Scan the given leagues for live / soon-starting games and summarise each
     game's moneyline market (wallets vs cash vs line). Two phases: find games
@@ -790,6 +798,8 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
         ev, m = task
         sides, _, truncated = side_table(m, min_shares=min_shares, max_pages=depth_pages)
         if not sides:
+            return None
+        if hide_decided and is_decided([s["price"] for s in sides]):
             return None
         return _scan_row(ev, m, sides, truncated, tz), {"event": ev, "market": annotate_market(m, ev)}
 

@@ -17,9 +17,9 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 5:
+if getattr(wd, "DATA_VERSION", 0) < 6:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 5), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 6), commit it, then reboot the app from 'Manage app'.")
     st.stop()
 
 # ---------- shared formatting ----------
@@ -54,8 +54,8 @@ def show_sides(df: pd.DataFrame):
 
 # ---------- cached data calls ----------
 @st.cache_data(ttl=300, show_spinner=False)
-def c_search(query, only_live):
-    return wd.search_games(query, only_live=only_live)
+def c_search(query, only_live, hide_decided):
+    return wd.search_games(query, only_live=only_live, hide_decided=hide_decided)
 
 
 @st.cache_data(ttl=90, show_spinner=False)
@@ -77,6 +77,8 @@ with st.sidebar:
     st.caption("Holder depth = pages of 100 holders per side. More pages = fuller wallet counts, slower.")
     pages = st.slider("Holder depth (analyzer)", 1, 100, 30)
     top_n = st.slider("Top holders shown per side", 3, 25, 10)
+    hide_decided = st.checkbox("Hide decided games (a side at 99¢ or more)", True,
+                               help="Removes markets priced 99¢/1¢ or beyond, which are effectively settled.")
     st.divider()
     st.caption("Data: Polymarket Gamma + Data API v2 (public, no key). "
                "Cash in = what current holders paid for their open shares. "
@@ -166,7 +168,7 @@ with tab_game:
     if go and query.strip():
         try:
             with st.spinner("Searching Polymarket…"):
-                st.session_state["found"] = c_search(query, only_live)
+                st.session_state["found"] = c_search(query, only_live, hide_decided)
             st.session_state.pop("opened", None)
         except Exception as e:
             st.error(f"Search failed: {e}")
@@ -248,7 +250,7 @@ with tab_scan:
                 try:
                     df, items, report = wd.scan_games(chosen, hours_ahead=ahead, hours_back=back, depth_pages=depth,
                                                       min_shares=min_shares, max_games=max_games, tz=tz, progress=prog,
-                                                      deepen_top=deepen_n if deepen else 0, status=status,
+                                                      deepen_top=deepen_n if deepen else 0, status=status, hide_decided=hide_decided,
                                                       market_types=market_types)
                     st.session_state["scan"] = (df, items, report, dt.datetime.now(dt.timezone.utc))
                 except Exception as e:
