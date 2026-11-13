@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 6
+DATA_VERSION = 7
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -201,11 +201,24 @@ def search_games(query: str, only_live: bool = False, limit_per_type: int = 10, 
     moneyline markets, otherwise in the search's relevance order.
     """
     q = query.strip()
-    link = re.search(r"polymarket\.com/(?:[a-z\-]+/)?event/([^/?#\s]+)", q)
+    # Any polymarket.com link: /event/<slug>, /sports/<league>/<slug>, /<lang>/event/<slug>, ...
+    link = re.search(r"polymarket\.com/(?:[^\s?#]*/)?(?:event|sports/[^/\s?#]+|[a-z]{2}/sports/[^/\s?#]+)/([^/?#\s]+)", q)
+    if not link and "polymarket.com/" in q:
+        link = re.search(r"polymarket\.com/.*?/([^/?#\s]+)/?(?:[?#].*)?$", q)
+    events = []
     if link:
-        events = _gamma("/events", {"slug": link.group(1)})
-        events = events if isinstance(events, list) else [events]
-    else:
+        slug = link.group(1)
+        try:
+            got = _gamma("/events", {"slug": slug})
+            events = got if isinstance(got, list) else [got]
+        except Exception:
+            events = []
+        events = [e for e in events if e]
+        if not events:
+            # slug lookup came up empty: search on the slug's words instead of the whole URL
+            q = re.sub(r"[-_]+", " ", re.sub(r"\b20\d\d \d\d \d\d\b", "", re.sub(r"[-_]+", " ", slug).strip())).strip()
+            link = None
+    if not events:
         data = _gamma("/public-search", {
             "q": q, "limit_per_type": limit_per_type, "events_status": "active",
             "search_tags": "false", "search_profiles": "false",
