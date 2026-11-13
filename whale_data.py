@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 4
+DATA_VERSION = 5
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -166,11 +166,21 @@ def annotate_market(m: dict, ev: dict) -> dict:
     return m
 
 
+def market_name(m: dict) -> str:
+    kind = _kind(m)
+    line = m.get("line")
+    if kind == "spread":
+        return f"Spread {line:+g}" if isinstance(line, (int, float)) else "Spread"
+    if kind == "total":
+        return f"Total {line:g}" if isinstance(line, (int, float)) else "Total"
+    return m.get("groupItemTitle") or ("Moneyline" if kind == "moneyline" else (m.get("sportsMarketType") or ""))
+
+
 def market_label(m: dict) -> str:
     title = m.get("_event_title") or ""
     q = m.get("question") or ""
     head = title if (not q or q == title) else (f"{title} — {q}" if title else q)
-    typ = m.get("sportsMarketType")
+    typ = market_name(m) or m.get("sportsMarketType")
     return ("[LIVE] " if m.get("_event_live") else "") + head + (f"  ({typ})" if typ else "")
 
 
@@ -663,15 +673,56 @@ def fetch_league_events(league: dict, hours_ahead: float = 24, hours_back: float
     return keep, errors
 
 
-def pick_markets(ev: dict) -> list:
-    """The 'who wins' market(s) of an event: moneyline (up to 3 for soccer), else the biggest two-sided non-Yes/No market."""
+TYPE_SETS = {
+    "moneyline": MAIN_MARKET_TYPES,
+    "spread": {"spreads", "spread"},
+    "total": {"totals", "total"},
+}
+
+
+def _kind(m: dict):
+    """Classify a Gamma market as moneyline / spread / total (or None)."""
+    t = (m.get("sportsMarketType") or "").lower()
+    for kind, names in TYPE_SETS.items():
+        if t in names:
+            return kind
+    outs = {str(o).lower() for o in _as_list(m.get("outcomes"))}
+    q = (m.get("question") or "").lower()
+    if outs == {"over", "under"}:
+        return "total"
+    if "spread" in q:
+        return "spread"
+    return None
+
+
+def _pick_main_line(ms: list):
+    """Spreads and totals come in many lines. The main line is the busiest one (most volume, else most liquid)."""
+    return max(ms, key=lambda m: (m.get("volumeNum") or 0, m.get("liquidityNum") or 0)) if ms else None
+
+
+def pick_markets(ev: dict, types=("moneyline",)) -> list:
+    """
+    Markets of an event for the requested types. Moneyline: up to 3 (soccer
+    splits home / draw / away), else the biggest two-sided non-Yes/No market.
+    Spread / total: the main (busiest) line only.
+    """
     ms = [m for m in ev.get("markets") or [] if m.get("conditionId") and not m.get("closed")]
-    main = [m for m in ms if m.get("sportsMarketType") in MAIN_MARKET_TYPES]
-    if main:
-        return main[:3]
-    named = [m for m in ms if len(_as_list(m.get("outcomes"))) == 2
-             and not set(_as_list(m.get("outcomes"))) & {"Yes", "No", "Over", "Under"}]
-    return sorted(named, key=lambda m: m.get("volumeNum") or 0, reverse=True)[:1]
+    out = []
+    if "moneyline" in types:
+        main = [m for m in ms if _kind(m) == "moneyline"]
+        if main:
+            out += main[:3]
+        else:
+            named = [m for m in ms if len(_as_list(m.get("outcomes"))) == 2
+                     and not set(_as_list(m.get("outcomes"))) & {"Yes", "No", "Over", "Under"}
+                     and _kind(m) is None]
+            out += sorted(named, key=lambda m: m.get("volumeNum") or 0, reverse=True)[:1]
+    for kind in ("spread", "total"):
+        if kind in types:
+            best = _pick_main_line([m for m in ms if _kind(m) == kind])
+            if best:
+                out.append(best)
+    return out
 
 
 def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
@@ -683,7 +734,7 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
     crowd = max(sides, key=lambda s: s["wallets"])
     return {
         "Sport": league["sport"], "League": league["league"], "Game": ev.get("title"),
-        "Market": m.get("groupItemTitle") or m.get("sportsMarketType") or "",
+        "Market": market_name(m),
         "Status": "LIVE" if ev.get("live") else "Upcoming", "Starts": fmt_local(start, tz),
         "Money side": money["Side"], "Line %": money["line_pct"], "Wallets %": money["wallet_pct"],
         "Cash %": money["cash_pct"], "Cash − Line (pts)": money["gap"],
@@ -695,7 +746,8 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
 
 def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, depth_pages: int = 1,
                min_shares: float = 1.0, max_games: int = 40, workers: int = 8, tz: str = DEFAULT_TZ,
-               progress=None, deepen_top: int = 0, deepen_pages: int = 10, status: str = "all"):
+               progress=None, deepen_top: int = 0, deepen_pages: int = 10, status: str = "all",
+               market_types=("moneyline",)):
     """
     Scan the given leagues for live / soon-starting games and summarise each
     game's moneyline market (wallets vs cash vs line). Two phases: find games
@@ -730,7 +782,7 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
 
     far = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
     events.sort(key=lambda e: (not e.get("live"), event_start(e) or far))
-    tasks = [(ev, m) for ev in events for m in pick_markets(ev)]
+    tasks = [(ev, m) for ev in events for m in pick_markets(ev, market_types)]
     report["markets"] = len(tasks)
     tasks = tasks[:max_games]
 

@@ -17,9 +17,9 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 4:
+if getattr(wd, "DATA_VERSION", 0) < 5:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 4), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 5), commit it, then reboot the app from 'Manage app'.")
     st.stop()
 
 # ---------- shared formatting ----------
@@ -221,6 +221,10 @@ with tab_scan:
             back = a2.slider("Include started up to (hours ago)", 0, 12, 6)
             depth = a3.slider("Holder depth (pages of 100/side)", 1, 10, 1)
             max_games = a4.slider("Max games", 5, 100, 30)
+            type_labels = st.multiselect("Bet types", ["Moneyline", "Spread", "Over/Under"], default=["Moneyline"],
+                                         help="Spread and Over/Under use each game's main (busiest) line.")
+            market_types = tuple({"Moneyline": "moneyline", "Spread": "spread", "Over/Under": "total"}[t]
+                                 for t in type_labels) or ("moneyline",)
             status_label = st.radio("Games to include", ["All games", "Live only", "Exclude live (not started yet)"],
                                     horizontal=True)
             status = {"All games": "all", "Live only": "live"}.get(status_label, "upcoming")
@@ -244,7 +248,8 @@ with tab_scan:
                 try:
                     df, items, report = wd.scan_games(chosen, hours_ahead=ahead, hours_back=back, depth_pages=depth,
                                                       min_shares=min_shares, max_games=max_games, tz=tz, progress=prog,
-                                                      deepen_top=deepen_n if deepen else 0, status=status)
+                                                      deepen_top=deepen_n if deepen else 0, status=status,
+                                                      market_types=market_types)
                     st.session_state["scan"] = (df, items, report, dt.datetime.now(dt.timezone.utc))
                 except Exception as e:
                     st.error(f"Scan failed: {e}")
