@@ -216,6 +216,14 @@ with tab_scan:
             back = a2.slider("Include started up to (hours ago)", 0, 12, 6)
             depth = a3.slider("Holder depth (pages of 100/side)", 1, 10, 1)
             max_games = a4.slider("Max games", 5, 100, 30)
+            status_label = st.radio("Games to include", ["All games", "Live only", "Exclude live (not started yet)"],
+                                    horizontal=True)
+            status = {"All games": "all", "Live only": "live"}.get(status_label, "upcoming")
+            d1, d2 = st.columns(2)
+            deepen = d1.checkbox("Take a closer look at the biggest games", True,
+                                 help="After the quick scan, re-reads the games with the most money on them, "
+                                      "counting far more holders so their wallet counts and cash totals are fuller.")
+            deepen_n = d2.slider("How many of the biggest games", 1, 15, 5)
             run = st.form_submit_button("Scan", type="primary")
 
         if run:
@@ -230,7 +238,8 @@ with tab_scan:
 
                 try:
                     df, items, report = wd.scan_games(chosen, hours_ahead=ahead, hours_back=back, depth_pages=depth,
-                                                      min_shares=min_shares, max_games=max_games, tz=tz, progress=prog)
+                                                      min_shares=min_shares, max_games=max_games, tz=tz, progress=prog,
+                                                      deepen_top=deepen_n if deepen else 0, status=status)
                     st.session_state["scan"] = (df, items, report, dt.datetime.now(dt.timezone.utc))
                 except Exception as e:
                     st.error(f"Scan failed: {e}")

@@ -694,7 +694,7 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
 
 def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, depth_pages: int = 1,
                min_shares: float = 1.0, max_games: int = 40, workers: int = 8, tz: str = DEFAULT_TZ,
-               progress=None):
+               progress=None, deepen_top: int = 0, deepen_pages: int = 10, status: str = "all"):
     """
     Scan the given leagues for live / soon-starting games and summarise each
     game's moneyline market (wallets vs cash vs line). Two phases: find games
@@ -721,6 +721,10 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
             except Exception as e:
                 report["errors"].append(str(e))
             progress(i, len(futs), "Finding games")
+    if status == "live":
+        events = [e for e in events if e.get("live")]
+    elif status == "upcoming":
+        events = [e for e in events if not e.get("live")]
     report["events"] = len(events)
 
     far = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
@@ -749,6 +753,26 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
                 report["errors"].append(f"{futs[f][0].get('title')}: {e}")
             progress(i, len(futs), "Reading holders")
     report["analyzed"] = len(rows)
+
+    # second pass: re-read the games with the most cash at a much deeper holder depth
+    if deepen_top > 0 and rows and deepen_pages > depth_pages:
+        big = sorted(range(len(rows)), key=lambda i: rows[i]["Total cash $"], reverse=True)[:deepen_top]
+
+        def redo(i):
+            ev, m = items[i]["event"], items[i]["market"]
+            sides, _, trunc = side_table(m, min_shares=min_shares, max_pages=deepen_pages)
+            return i, (_scan_row(ev, m, sides, trunc, tz) if sides else None)
+
+        with ThreadPoolExecutor(workers) as ex:
+            futs = [ex.submit(redo, i) for i in big]
+            for n, f in enumerate(as_completed(futs), start=1):
+                try:
+                    i, row = f.result()
+                    if row:
+                        rows[i] = row
+                except Exception as e:
+                    report["errors"].append(f"deepen: {e}")
+                progress(n, len(futs), "Going deeper on the biggest games")
 
     df = pd.DataFrame(rows)
     if not df.empty:
