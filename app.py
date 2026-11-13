@@ -43,6 +43,11 @@ def gap_color(v):
     return "color: #1a9850" if v > 0 else "color: #d73027"
 
 
+def live_row(row):
+    """Light gray wash across the whole row for live games (works in light and dark themes)."""
+    return ["background-color: rgba(128,128,128,0.25)" if row["Status"] == "LIVE" else ""] * len(row)
+
+
 def show_sides(df: pd.DataFrame):
     """The small headline table (line, wallets %, cash %, cash in, value now) + a detail expander."""
     small = ["Side", "Line", "Wallets", "Wallets %", "Cash in $", "Cash %", "Value now $", "Cash − Line (pts)"]
@@ -289,11 +294,13 @@ with tab_scan:
                 cols = ["Status", "Sport", "League", "Game", "Market", "Starts", "Money side", "Line %", "Wallets %",
                         "Cash %", "Cash − Line (pts)", "Total cash $", "Value now $", "Wallets", "Crowd side",
                         "Crowd ≠ money", "Partial count"]
-                st.dataframe(v[cols].style.map(gap_color, subset=["Cash − Line (pts)"]), hide_index=True,
+                st.dataframe(v[cols].style.apply(live_row, axis=1).map(gap_color, subset=["Cash − Line (pts)"]), hide_index=True,
                              use_container_width=True, height=min(80 + 36 * len(v), 700), column_config={
+                                 "Status": st.column_config.TextColumn(pinned=True),
+                                 "Game": st.column_config.TextColumn(pinned=True),
                                  "Line %": PCT, "Wallets %": PCT, "Cash %": PCT, "Cash − Line (pts)": PTS,
                                  "Total cash $": MONEY, "Value now $": MONEY, "Wallets": INT})
-                st.caption("Money side = side with the most cash. Cash − Line = its share of cash minus the line's "
+                st.caption("Gray rows are live. Money side = side with the most cash. Cash − Line = its share of cash minus the line's "
                            "implied probability (positive: more money than the price implies). "
                            "“Partial count” = holder depth cut off, so wallet counts are lower bounds.")
                 st.download_button("Download scan (CSV)", v[cols].to_csv(index=False), "scan.csv", "text/csv")
