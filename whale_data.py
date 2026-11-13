@@ -33,6 +33,7 @@ import requests
 
 import whale_flow as wf
 
+DATA_VERSION = 4
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 

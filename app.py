@@ -17,6 +17,11 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
+if getattr(wd, "DATA_VERSION", 0) < 4:
+    st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
+             "(it should contain the line DATA_VERSION = 4), commit it, then reboot the app from 'Manage app'.")
+    st.stop()
+
 # ---------- shared formatting ----------
 MONEY = st.column_config.NumberColumn(format="$%,.0f")
 PCT = st.column_config.NumberColumn(format="%.0f%%")
