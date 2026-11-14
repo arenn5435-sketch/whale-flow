@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 11
+DATA_VERSION = 12
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -828,7 +828,7 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
         "Crowd side": crowd["Side"], "Crowd ≠ money": crowd is not money, "Partial count": truncated,
         "_start": start, "_live": is_live(ev),
         "_sides": [{"side": x["Side"], "wallets_pct": x["wallet_pct"], "cash_pct": x["cash_pct"],
-                    "line_pct": x["line_pct"]} for x in sides],
+                    "line_pct": x["line_pct"], "cash": x["cash"]} for x in sides],
     }
 
 

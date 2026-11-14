@@ -17,9 +17,9 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 11:
+if getattr(wd, "DATA_VERSION", 0) < 12:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 11), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 12), commit it, then reboot the app from 'Manage app'.")
     st.stop()
 
 # ---------- shared formatting ----------
@@ -71,8 +71,10 @@ def top_scroll_table(df: pd.DataFrame):
     """Static HTML table whose horizontal scrollbar sits ABOVE the table (flip the box, flip the content back)."""
     fmt = {"Line %": "{:.0f}%", "Wallets %": "{:.0f}%", "Cash %": "{:.0f}%", "Cash − Line (pts)": "{:+.0f}",
            "Total cash $": "${:,.0f}", "Value now $": "${:,.0f}", "Wallets": "{:,.0f}",
+           "A wallets %": "{:.0f}%", "A cash %": "{:.0f}%", "A line %": "{:.0f}%", "A cash $": "${:,.0f}",
+           "B wallets %": "{:.0f}%", "B cash %": "{:.0f}%", "B line %": "{:.0f}%", "B cash $": "${:,.0f}",
            "Play wallets %": "{:.0f}%", "Play cash %": "{:.0f}%", "Play line %": "{:.0f}%"}
-    sty = (df.style.apply(live_row, axis=1).map(gap_color, subset=["Cash − Line (pts)"])
+    sty = (df.style.apply(live_row, axis=1)
            .format({k: v for k, v in fmt.items() if k in df.columns}, na_rep="—").hide(axis="index"))
     st.markdown(
         """<style>
@@ -330,6 +332,16 @@ with tab_scan:
                 df["Play wallets %"] = [p["wallets_pct"] if p else None for p in plays]
                 df["Play cash %"] = [p["cash_pct"] if p else None for p in plays]
                 df["Play line %"] = [p["line_pct"] if p else None for p in plays]
+            if not df.empty:
+                # every side's numbers on the same row, not just the side with the most cash
+                for tag in ("A", "B"):
+                    i = 0 if tag == "A" else 1
+                    pick = [sd[i] if sd and len(sd) > i else {} for sd in df["_sides"]]
+                    df[f"Side {tag}"] = [p.get("side", "") for p in pick]
+                    df[f"{tag} wallets %"] = [p.get("wallets_pct") for p in pick]
+                    df[f"{tag} cash %"] = [p.get("cash_pct") for p in pick]
+                    df[f"{tag} line %"] = [p.get("line_pct") for p in pick]
+                    df[f"{tag} cash $"] = [p.get("cash") for p in pick]
             if df.empty:
                 st.warning("No games with holder data in that window. Widen the hours or pick more leagues.")
             else:
@@ -356,20 +368,22 @@ with tab_scan:
                     v = v.sort_values("Wallets %", ascending=False)
 
                 cols = ["Status", "Sport", "League", "Game", "Market", "Starts", "Play", "Play wallets %", "Play cash %",
-                        "Play line %", "Money side", "Line %", "Wallets %",
-                        "Cash %", "Cash − Line (pts)", "Total cash $", "Value now $", "Wallets", "Crowd side",
+                        "Play line %", "Side A", "A wallets %", "A cash %", "A line %", "A cash $",
+                        "Side B", "B wallets %", "B cash %", "B line %", "B cash $", "Total cash $", "Value now $", "Wallets", "Crowd side",
                         "Crowd ≠ money", "Partial count"]
                 view = st.radio("Table view", ["Interactive (sortable, pinned columns)", "Scrollbar on top"],
                                 horizontal=True, label_visibility="collapsed")
                 if view.startswith("Scrollbar"):
                     top_scroll_table(v[cols])
                 else:
-                  st.dataframe(v[cols].style.apply(live_row, axis=1).map(gap_color, subset=["Cash − Line (pts)"]), hide_index=True,
+                  st.dataframe(v[cols].style.apply(live_row, axis=1), hide_index=True,
                                use_container_width=True, height=min(80 + 36 * len(v), 700), column_config={
                                    "Status": st.column_config.TextColumn(pinned=True),
                                    "Game": st.column_config.TextColumn(pinned=True),
                                    "Line %": PCT, "Wallets %": PCT, "Cash %": PCT, "Cash − Line (pts)": PTS,
                                    "Play wallets %": PCT, "Play cash %": PCT, "Play line %": PCT,
+                                   "A wallets %": PCT, "A cash %": PCT, "A line %": PCT, "A cash $": MONEY,
+                                   "B wallets %": PCT, "B cash %": PCT, "B line %": PCT, "B cash $": MONEY,
                                    "Total cash $": MONEY, "Value now $": MONEY, "Wallets": INT})
                 st.caption("Yellow rows are plays, gray rows are live. Money side = side with the most cash. Cash − Line = its share of cash minus the line's "
                            "implied probability (positive: more money than the price implies). "
