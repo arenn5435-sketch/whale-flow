@@ -43,18 +43,19 @@ def gap_color(v):
     return "color: #1a9850" if v > 0 else "color: #d73027"
 
 
-def find_play(sides, wmin, wmax):
+def find_play(sides, wmin, wmax, reverse=False):
     """
     First side that meets all three rules, else None:
       1) its share of wallets is between wmin and wmax (default 40-49%)
       2) its share of cash is higher than its share of wallets
       3) the line (implied probability) is at least its share of cash
+         (reverse=True flips this: the line is at most its share of cash)
     """
     for s in sides or []:
         w, c, l = s.get("wallets_pct"), s.get("cash_pct"), s.get("line_pct")
         if None in (w, c, l):
             continue
-        if wmin <= w < wmax + 1 and c > w and l >= c:
+        if wmin <= w < wmax + 1 and c > w and ((l <= c) if reverse else (l >= c)):
             return s
     return None
 
@@ -313,13 +314,18 @@ with tab_scan:
             if report["markets"] > report["analyzed"] + len(report["errors"]) and report["markets"] > 0:
                 st.caption("Raise “Max games” to cover the rest; games with no holders yet are skipped.")
             if not df.empty:
+                k1, k2 = st.columns(2)
+                highlight = k1.checkbox("Highlight plays in yellow", True)
+                reverse = k2.checkbox("Reverse the line rule (line at or below cash %)", False,
+                                      help="Off: line % must be at least the cash %. On: line % must be at or below the cash %, "
+                                           "i.e. the price is lower than the money on that side implies.")
                 with st.expander("Play rules (yellow rows)", expanded=False):
                     r1, r2 = st.columns(2)
                     wmin = r1.number_input("Wallets % from", 0, 100, 40)
                     wmax = r2.number_input("Wallets % to", 0, 100, 49)
                     st.caption("A side is a play when: its wallets % is in that range, AND its cash % is higher than its "
-                               "wallets %, AND the line % is at least its cash %.")
-                plays = [find_play(sd, wmin, wmax) for sd in df["_sides"]]
+                               "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %.")
+                plays = [find_play(sd, wmin, wmax, reverse) if highlight else None for sd in df["_sides"]]
                 df["Play"] = [p["side"] if p else "" for p in plays]
                 df["Play wallets %"] = [p["wallets_pct"] if p else None for p in plays]
                 df["Play cash %"] = [p["cash_pct"] if p else None for p in plays]
