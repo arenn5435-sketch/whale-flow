@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 7
+DATA_VERSION = 8
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -110,14 +110,46 @@ def _parse_dt(s):
 
 def event_start(ev: dict):
     """Game start time. Deliberately NOT startDate (that's when the event was created)."""
-    d = _parse_dt(ev.get("startTime"))
-    if d:
-        return d
-    for m in ev.get("markets") or []:
-        d = _parse_dt(m.get("gameStartTime"))
-        if d:
-            return d
-    return None
+    game = [d for d in (_parse_dt(m.get("gameStartTime")) for m in ev.get("markets") or []) if d]
+    if game:
+        return min(game)          # market gameStartTime is the actual kickoff / first serve
+    return _parse_dt(ev.get("startTime"))
+
+
+def is_live(ev: dict) -> bool:
+    """Gamma's live flag can lag, so a game that has passed its start time (and isn't over) counts as live."""
+    if ev.get("live"):
+        return True
+    if ev.get("ended") or ev.get("closed"):
+        return False
+    start = event_start(ev)
+    return bool(start and start <= dt.datetime.now(dt.timezone.utc))
+
+
+CLOB_BASE = "https://clob.polymarket.com"
+
+
+def live_price(token_id: str):
+    """
+    Current price straight from the order book (what Polymarket's site shows):
+    midpoint of best bid / best ask, or the last trade when the spread is wider
+    than 10c. Gamma's outcomePrices are cached and can lag by a while.
+    """
+    try:
+        r = requests.get(f"{CLOB_BASE}/book", params={"token_id": token_id}, timeout=6)
+        if r.status_code >= 400:
+            return None
+        b = r.json()
+        bids = [float(x["price"]) for x in b.get("bids") or []]
+        asks = [float(x["price"]) for x in b.get("asks") or []]
+        last = b.get("last_trade_price")
+        last = float(last) if last not in (None, "") else None
+        if bids and asks:
+            bb, ba = max(bids), min(asks)
+            return (bb + ba) / 2 if ba - bb <= 0.10 else (last if last is not None else (bb + ba) / 2)
+        return last
+    except Exception:
+        return None
 
 
 def fmt_local(d, tz: str = DEFAULT_TZ) -> str:
@@ -160,7 +192,9 @@ def annotate_market(m: dict, ev: dict) -> dict:
     m = dict(m)
     m["_event_title"] = ev.get("title")
     m["_event_slug"] = ev.get("slug")
-    m["_event_live"] = bool(ev.get("live"))
+    m["_event_live"] = is_live(ev)
+    st_ = event_start(ev)
+    m["_start_iso"] = st_.isoformat() if st_ else None
     m["_event_ended"] = bool(ev.get("ended"))
     m["_event_start"] = ev.get("startTime") or m.get("gameStartTime")
     return m
@@ -261,6 +295,9 @@ def side_table(market: dict, min_shares: float = 1.0, max_pages: int = 30):
 
     groups, truncated = wf._walk_holders(cond, limit=100, include_pnl=True,
                                          min_balance=min_shares, max_pages=max_pages)
+    tids = [str(g["token_id"]) for g in groups]
+    with ThreadPoolExecutor(max(len(tids), 1)) as ex:
+        live = dict(zip(tids, ex.map(live_price, tids)))
     sides = []
     for grp in groups:
         tid = str(grp["token_id"])
@@ -276,19 +313,26 @@ def side_table(market: dict, min_shares: float = 1.0, max_pages: int = 30):
         if label in ("Yes", "No"):
             label = f"{label}: {market.get('groupItemTitle') or market.get('question') or 'this market'}"
 
-        price = next((float(h["current_price"]) for h in holders if h.get("current_price") is not None), None)
+        price = live.get(tid)
+        is_live_price = price is not None
+        if price is None:
+            price = next((float(h["current_price"]) for h in holders if h.get("current_price") is not None), None)
         if price is None and idx is not None and idx < len(gprices):
             price = gprices[idx]
 
         costed = [h for h in holders if h.get("entry_cost_usdc") is not None]
         cash = sum(float(h["entry_cost_usdc"]) for h in costed)
         shares_costed = sum(float(h.get("amount") or 0) for h in costed)
-        value = sum(float(h["current_value"]) for h in holders if h.get("current_value") is not None)
-        pnl = sum(float(h["current_value"]) - float(h["entry_cost_usdc"])
-                  for h in costed if h.get("current_value") is not None)
+        def val(h):
+            """Holder's position at the freshest price we have."""
+            if is_live_price and h.get("amount") is not None:
+                return float(h["amount"]) * price
+            return float(h["current_value"]) if h.get("current_value") is not None else None
+        value = sum(v for v in (val(h) for h in holders) if v is not None)
+        pnl = sum(val(h) - float(h["entry_cost_usdc"]) for h in costed if val(h) is not None)
         costs_desc = sorted((float(h["entry_cost_usdc"]) for h in costed), reverse=True)
         sides.append({
-            "order": idx if idx is not None else 99, "token_id": tid, "Side": label, "price": price,
+            "order": idx if idx is not None else 99, "token_id": tid, "live_price": is_live_price, "Side": label, "price": price,
             "wallets": len({h.get("proxy_wallet") for h in holders}),
             "shares": sum(float(h.get("amount") or 0) for h in holders),
             "cash": cash, "value": value, "pnl": pnl,
@@ -544,6 +588,9 @@ def analyze_market(market: dict, min_shares: float = 1.0, max_pages: int = 30, i
     warnings = []
 
     sides, groups, truncated = side_table(market, min_shares=min_shares, max_pages=max_pages)
+    if sides and not all(s["live_price"] for s in sides):
+        warnings.append("Couldn't reach the live order book for this market, so prices shown are Polymarket's cached "
+                        "prices, which can lag.")
     if not sides:
         warnings.append("No holders came back for this market (too new, or the market has no open positions).")
     if truncated:
@@ -684,7 +731,7 @@ def fetch_league_events(league: dict, hours_ahead: float = 24, hours_back: float
         if ev.get("closed") or ev.get("ended"):
             continue
         start = event_start(ev)
-        if not ev.get("live") and (start is None or not (lo <= start <= hi)):
+        if not is_live(ev) and (start is None or not (lo <= start <= hi)):
             continue
         ev["_league"] = league
         keep.append(ev)
@@ -756,12 +803,12 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
     return {
         "Sport": league["sport"], "League": league["league"], "Game": ev.get("title"),
         "Market": market_name(m),
-        "Status": "LIVE" if ev.get("live") else "Upcoming", "Starts": fmt_local(start, tz),
+        "Status": "LIVE" if is_live(ev) else "Upcoming", "Starts": fmt_local(start, tz),
         "Money side": money["Side"], "Line %": money["line_pct"], "Wallets %": money["wallet_pct"],
         "Cash %": money["cash_pct"], "Cash − Line (pts)": money["gap"],
         "Total cash $": tot_c, "Value now $": sum(s["value"] for s in sides), "Wallets": tot_w,
         "Crowd side": crowd["Side"], "Crowd ≠ money": crowd is not money, "Partial count": truncated,
-        "_start": start, "_live": bool(ev.get("live")),
+        "_start": start, "_live": is_live(ev),
     }
 
 
@@ -796,13 +843,13 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
                 report["errors"].append(str(e))
             progress(i, len(futs), "Finding games")
     if status == "live":
-        events = [e for e in events if e.get("live")]
+        events = [e for e in events if is_live(e)]
     elif status == "upcoming":
-        events = [e for e in events if not e.get("live")]
+        events = [e for e in events if not is_live(e)]
     report["events"] = len(events)
 
     far = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
-    events.sort(key=lambda e: (not e.get("live"), event_start(e) or far))
+    events.sort(key=lambda e: (not is_live(e), event_start(e) or far))
     tasks = [(ev, m) for ev in events for m in pick_markets(ev, market_types)]
     report["markets"] = len(tasks)
     tasks = tasks[:max_games]

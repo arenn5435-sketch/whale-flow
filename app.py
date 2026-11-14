@@ -17,9 +17,9 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 7:
+if getattr(wd, "DATA_VERSION", 0) < 8:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 7), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 8), commit it, then reboot the app from 'Manage app'.")
     st.stop()
 
 # ---------- shared formatting ----------
@@ -58,12 +58,12 @@ def show_sides(df: pd.DataFrame):
 
 
 # ---------- cached data calls ----------
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def c_search(query, only_live, hide_decided):
     return wd.search_games(query, only_live=only_live, hide_decided=hide_decided)
 
 
-@st.cache_data(ttl=90, show_spinner=False)
+@st.cache_data(ttl=20, show_spinner=False)
 def c_analyze(market, min_shares, pages, flow, sharp, top_n, tz):
     return wd.analyze_market(market, min_shares=min_shares, max_pages=pages, include_flow=flow,
                              sharp=sharp, top_holders=top_n, tz=tz)
@@ -84,6 +84,9 @@ with st.sidebar:
     top_n = st.slider("Top holders shown per side", 3, 25, 10)
     hide_decided = st.checkbox("Hide decided games (a side at 99¢ or more)", True,
                                help="Removes markets priced 99¢/1¢ or beyond, which are effectively settled.")
+    if st.button("Refresh prices now"):
+        st.cache_data.clear()
+        st.rerun()
     st.divider()
     st.caption("Data: Polymarket Gamma + Data API v2 (public, no key). "
                "Cash in = what current holders paid for their open shares. "
@@ -106,6 +109,10 @@ def render_analysis(res: dict):
         meta.append(m["sportsMarketType"])
     if m.get("line") is not None:
         meta.append(f"line {m['line']}")
+    start = wd._parse_dt(m.get("_start_iso"))
+    if start:
+        meta.append(f"starts {wd.fmt_local(start, tz)}")
+    meta.append(f"prices: {'live order book' if all(s['live_price'] for s in res['sides']) else 'cached (may lag)'}")
     meta.append(f"updated {wd.fmt_local(res['updated'], tz)}")
     st.caption(" · ".join(meta))
 
