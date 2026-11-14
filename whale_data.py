@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 8
+DATA_VERSION = 10
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -116,14 +116,28 @@ def event_start(ev: dict):
     return _parse_dt(ev.get("startTime"))
 
 
-def is_live(ev: dict) -> bool:
-    """Gamma's live flag can lag, so a game that has passed its start time (and isn't over) counts as live."""
-    if ev.get("live"):
-        return True
+def live_reason(ev: dict):
+    """(is_live, why). Uses every signal Gamma gives: the live flag, game status, a score, the period, and the start time."""
     if ev.get("ended") or ev.get("closed"):
-        return False
+        return False, "ended/closed"
+    if ev.get("live"):
+        return True, "live flag"
+    status = str(ev.get("gameStatus") or "").lower()
+    if status and any(k in status for k in ("progress", "live", "half", "quarter", "inning", "set", "period")):
+        return True, f"gameStatus={ev.get('gameStatus')}"
+    if str(ev.get("score") or "").strip():
+        return True, f"has score ({ev.get('score')})"
+    period = str(ev.get("period") or "").strip().lower()
+    if period and period not in ("ns", "scheduled", "pre", "pregame", "not started", "0"):
+        return True, f"period={ev.get('period')}"
     start = event_start(ev)
-    return bool(start and start <= dt.datetime.now(dt.timezone.utc))
+    if start and start <= dt.datetime.now(dt.timezone.utc):
+        return True, "start time has passed"
+    return False, "not started" if start else "no start time"
+
+
+def is_live(ev: dict) -> bool:
+    return live_reason(ev)[0]
 
 
 CLOB_BASE = "https://clob.polymarket.com"
@@ -731,7 +745,11 @@ def fetch_league_events(league: dict, hours_ahead: float = 24, hours_back: float
         if ev.get("closed") or ev.get("ended"):
             continue
         start = event_start(ev)
-        if not is_live(ev) and (start is None or not (lo <= start <= hi)):
+        # the time window applies to every game, live ones included
+        if start is None:
+            if not is_live(ev):
+                continue
+        elif not (lo <= start <= hi):
             continue
         ev["_league"] = league
         keep.append(ev)
@@ -829,6 +847,8 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
     has counts and error strings for the diagnostics panel.
     """
     progress = progress or (lambda done, total, text: None)
+    # Live-only looks back a full day (long matches); upcoming-only never looks back.
+    hours_back = max(hours_back, 24) if status == "live" else (0 if status == "upcoming" else hours_back)
     report = {"leagues": len(leagues), "events": 0, "markets": 0, "analyzed": 0, "errors": []}
 
     events = []
@@ -842,6 +862,13 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
             except Exception as e:
                 report["errors"].append(str(e))
             progress(i, len(futs), "Finding games")
+    report["debug"] = [{
+        "Game": e.get("title"), "League": e["_league"]["league"], "live flag": e.get("live"), "gameStatus": e.get("gameStatus"),
+        "score": e.get("score"), "period": e.get("period"), "ended": e.get("ended"),
+        "startTime (event)": e.get("startTime"),
+        "gameStartTime (market)": next((m.get("gameStartTime") for m in e.get("markets") or [] if m.get("gameStartTime")), None),
+        "Our start": fmt_local(event_start(e), tz), "Counted as": "LIVE" if is_live(e) else "Upcoming",
+        "Because": live_reason(e)[1]} for e in events]
     if status == "live":
         events = [e for e in events if is_live(e)]
     elif status == "upcoming":

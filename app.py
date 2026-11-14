@@ -17,9 +17,9 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 8:
+if getattr(wd, "DATA_VERSION", 0) < 10:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 8), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 10), commit it, then reboot the app from 'Manage app'.")
     st.stop()
 
 # ---------- shared formatting ----------
@@ -231,8 +231,8 @@ with tab_scan:
                                           [f"{l['sport']} · {l['league']}" for l in league_opts])
             st.caption("Leagues are split out under each sport (e.g. Basketball · NBA, NCAAM, WNBA; Tennis · ATP, WTA).")
             a1, a2, a3, a4 = st.columns(4)
-            ahead = a1.slider("Starting within (hours)", 1, 72, 24)
-            back = a2.slider("Include started up to (hours ago)", 0, 12, 6)
+            ahead = a1.slider("Show games starting in the next (hours)", 1, 72, 24)
+            back = a2.slider("Also show games that started up to (hours ago)", 0, 12, 6)
             depth = a3.slider("Holder depth (pages of 100/side)", 1, 10, 1)
             max_games = a4.slider("Max games", 5, 100, 30)
             type_labels = st.multiselect("Bet types", ["Moneyline", "Spread", "Over/Under"], default=["Moneyline"],
@@ -318,6 +318,9 @@ with tab_scan:
                     if st.button("Open full analysis"):
                         st.session_state["from_scan"] = items[pick]["market"]
                         st.success("Loaded. Switch to the “Analyze a game” tab.")
+            if report.get("debug"):
+                with st.expander("Why each game was counted as live or upcoming (send me this if a game is wrong)"):
+                    st.dataframe(pd.DataFrame(report["debug"]), hide_index=True, use_container_width=True)
             if report["errors"]:
                 with st.expander(f"Diagnostics ({len(report['errors'])} errors)"):
                     for e in report["errors"][:50]:
