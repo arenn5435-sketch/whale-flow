@@ -17,9 +17,9 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 11:
+if getattr(wd, "DATA_VERSION", 0) < 13:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 11), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 13), commit it, then reboot the app from 'Manage app'.")
     st.stop()
 
 # ---------- shared formatting ----------
@@ -70,8 +70,7 @@ def live_row(row):
 def top_scroll_table(df: pd.DataFrame):
     """Static HTML table whose horizontal scrollbar sits ABOVE the table (flip the box, flip the content back)."""
     fmt = {"Line %": "{:.0f}%", "Wallets %": "{:.0f}%", "Cash %": "{:.0f}%", "Cash − Line (pts)": "{:+.0f}",
-           "Total cash $": "${:,.0f}", "Value now $": "${:,.0f}", "Wallets": "{:,.0f}",
-           "Play wallets %": "{:.0f}%", "Play cash %": "{:.0f}%", "Play line %": "{:.0f}%"}
+           "Total cash $": "${:,.0f}", "Value now $": "${:,.0f}", "Wallets": "{:,.0f}", "Cash $": "${:,.0f}"}
     sty = (df.style.apply(live_row, axis=1).map(gap_color, subset=["Cash − Line (pts)"])
            .format({k: v for k, v in fmt.items() if k in df.columns}, na_rep="—").hide(axis="index"))
     st.markdown(
@@ -325,11 +324,10 @@ with tab_scan:
                     wmax = r2.number_input("Wallets % to", 0, 100, 49)
                     st.caption("A side is a play when: its wallets % is in that range, AND its cash % is higher than its "
                                "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %.")
-                plays = [find_play(sd, wmin, wmax, reverse) if highlight else None for sd in df["_sides"]]
-                df["Play"] = [p["side"] if p else "" for p in plays]
-                df["Play wallets %"] = [p["wallets_pct"] if p else None for p in plays]
-                df["Play cash %"] = [p["cash_pct"] if p else None for p in plays]
-                df["Play line %"] = [p["line_pct"] if p else None for p in plays]
+                def row_is_play(r):
+                    one = [{"wallets_pct": r["Wallets %"], "cash_pct": r["Cash %"], "line_pct": r["Line %"]}]
+                    return bool(highlight and find_play(one, wmin, wmax, reverse))
+                df["Play"] = ["✓" if row_is_play(r) else "" for _, r in df.iterrows()]
             if df.empty:
                 st.warning("No games with holder data in that window. Widen the hours or pick more leagues.")
             else:
@@ -338,7 +336,7 @@ with tab_scan:
                 only_plays = f1.checkbox("Only plays (yellow)")
                 min_cash = f2.number_input("Min total cash $", 0, 10_000_000, 0, 1000)
                 sort_by = f3.selectbox("Sort by", ["Live first, then cash", "Biggest |cash − line|", "Most cash",
-                                                   "Cash % on money side", "Wallets %"])
+                                                   "Cash %", "Wallets %"])
                 v = df.copy()
                 v["_i"] = range(len(v))
                 if only_plays:
@@ -350,15 +348,14 @@ with tab_scan:
                     v = v.reindex(v["Cash − Line (pts)"].abs().sort_values(ascending=False).index)
                 elif sort_by == "Most cash":
                     v = v.sort_values("Total cash $", ascending=False)
-                elif sort_by == "Cash % on money side":
+                elif sort_by == "Cash %":
                     v = v.sort_values("Cash %", ascending=False)
                 elif sort_by == "Wallets %":
                     v = v.sort_values("Wallets %", ascending=False)
 
-                cols = ["Status", "Sport", "League", "Game", "Market", "Starts", "Play", "Play wallets %", "Play cash %",
-                        "Play line %", "Money side", "Line %", "Wallets %",
-                        "Cash %", "Cash − Line (pts)", "Total cash $", "Value now $", "Wallets", "Crowd side",
-                        "Crowd ≠ money", "Partial count"]
+                cols = ["Status", "Sport", "League", "Game", "Market", "Starts", "Side", "Play", "Line %", "Wallets %",
+                        "Cash %", "Cash − Line (pts)", "Cash $", "Value now $", "Wallets", "Total cash $",
+                        "Crowd side", "Crowd ≠ money", "Partial count"]
                 view = st.radio("Table view", ["Interactive (sortable, pinned columns)", "Scrollbar on top"],
                                 horizontal=True, label_visibility="collapsed")
                 if view.startswith("Scrollbar"):
@@ -369,16 +366,15 @@ with tab_scan:
                                    "Status": st.column_config.TextColumn(pinned=True),
                                    "Game": st.column_config.TextColumn(pinned=True),
                                    "Line %": PCT, "Wallets %": PCT, "Cash %": PCT, "Cash − Line (pts)": PTS,
-                                   "Play wallets %": PCT, "Play cash %": PCT, "Play line %": PCT,
-                                   "Total cash $": MONEY, "Value now $": MONEY, "Wallets": INT})
-                st.caption("Yellow rows are plays, gray rows are live. Money side = side with the most cash. Cash − Line = its share of cash minus the line's "
+                                                                      "Cash $": MONEY, "Total cash $": MONEY, "Value now $": MONEY, "Wallets": INT})
+                st.caption("Yellow rows are plays, gray rows are live. Each game has one row per side. Cash − Line = its share of cash minus the line's "
                            "implied probability (positive: more money than the price implies). "
                            "“Partial count” = holder depth cut off, so wallet counts are lower bounds.")
                 st.download_button("Download scan (CSV)", v[cols].to_csv(index=False), "scan.csv", "text/csv")
 
                 if not v.empty:
                     pick = st.selectbox("Open a game in the analyzer", v["_i"],
-                                        format_func=lambda i: f"{df.loc[i, 'Game']} ({df.loc[i, 'Market']})")
+                                        format_func=lambda i: f"{df.loc[i, 'Game']} · {df.loc[i, 'Side']} ({df.loc[i, 'Market']})")
                     if st.button("Open full analysis"):
                         st.session_state["from_scan"] = items[pick]["market"]
                         st.success("Loaded. Switch to the “Analyze a game” tab.")

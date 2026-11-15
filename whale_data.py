@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 11
+DATA_VERSION = 13
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -822,13 +822,12 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
         "Sport": league["sport"], "League": league["league"], "Game": ev.get("title"),
         "Market": market_name(m),
         "Status": "LIVE" if is_live(ev) else "Upcoming", "Starts": fmt_local(start, tz),
-        "Money side": money["Side"], "Line %": money["line_pct"], "Wallets %": money["wallet_pct"],
-        "Cash %": money["cash_pct"], "Cash − Line (pts)": money["gap"],
-        "Total cash $": tot_c, "Value now $": sum(s["value"] for s in sides), "Wallets": tot_w,
+        "Total cash $": tot_c,
         "Crowd side": crowd["Side"], "Crowd ≠ money": crowd is not money, "Partial count": truncated,
         "_start": start, "_live": is_live(ev),
-        "_sides": [{"side": x["Side"], "wallets_pct": x["wallet_pct"], "cash_pct": x["cash_pct"],
-                    "line_pct": x["line_pct"]} for x in sides],
+        "_per_side": [{"Side": x["Side"], "Line %": x["line_pct"], "Wallets %": x["wallet_pct"],
+                       "Cash %": x["cash_pct"], "Cash − Line (pts)": x["gap"], "Cash $": x["cash"],
+                       "Value now $": x["value"], "Wallets": x["wallets"]} for x in sides],
     }
 
 
@@ -931,4 +930,11 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
         order = df.sort_values(["_live", "Total cash $"], ascending=[False, False]).index
         df = df.loc[order].reset_index(drop=True)
         items = [items[i] for i in order]
+        # one row per side: the other team of each game is its own entry
+        flat, flat_items = [], []
+        for g, item in zip(df.to_dict("records"), items):
+            for sd in g.pop("_per_side"):
+                flat.append({**g, **sd})
+                flat_items.append(item)
+        df, items = pd.DataFrame(flat), flat_items
     return df, items, report
