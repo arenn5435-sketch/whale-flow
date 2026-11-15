@@ -323,7 +323,7 @@ with tab_scan:
                                            "i.e. the price is lower than the money on that side implies.")
                 with st.expander("Play rules (yellow rows)", expanded=False):
                     r1, r2 = st.columns(2)
-                    wmin = r1.number_input("Wallets % from", 0, 100, 40)
+                    wmin = r1.number_input("Wallets % from", 0, 100, 0)
                     wmax = r2.number_input("Wallets % to", 0, 100, 49)
                     st.caption("A side is a play when: its wallets % is in that range, AND its cash % is higher than its "
                                "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %.")
@@ -342,6 +342,10 @@ with tab_scan:
                     df[f"{tag} cash %"] = [p.get("cash_pct") for p in pick]
                     df[f"{tag} line %"] = [p.get("line_pct") for p in pick]
                     df[f"{tag} cash $"] = [p.get("cash") for p in pick]
+                    df[f"{tag}: wallets / cash / line"] = [
+                        f"{p['side']}: {p['wallets_pct']:.0f}% / {p['cash_pct']:.0f}% / {p['line_pct']:.0f}%"
+                        if p and None not in (p.get("wallets_pct"), p.get("cash_pct"), p.get("line_pct")) else ""
+                        for p in pick]
             if df.empty:
                 st.warning("No games with holder data in that window. Widen the hours or pick more leagues.")
             else:
@@ -367,10 +371,11 @@ with tab_scan:
                 elif sort_by == "Wallets %":
                     v = v.sort_values("Wallets %", ascending=False)
 
-                cols = ["Status", "Sport", "League", "Game", "Market", "Starts", "Play", "Play wallets %", "Play cash %",
-                        "Play line %", "Side A", "A wallets %", "A cash %", "A line %", "A cash $",
-                        "Side B", "B wallets %", "B cash %", "B line %", "B cash $", "Total cash $", "Value now $", "Wallets", "Crowd side",
-                        "Crowd ≠ money", "Partial count"]
+                cols = ["Status", "Game", "Starts", "A: wallets / cash / line", "B: wallets / cash / line", "Play",
+                        "Side A", "A wallets %", "A cash %", "A line %", "A cash $",
+                        "Side B", "B wallets %", "B cash %", "B line %", "B cash $",
+                        "Total cash $", "Value now $", "Wallets", "Sport", "League", "Market",
+                        "Play wallets %", "Play cash %", "Play line %", "Crowd side", "Crowd ≠ money", "Partial count"]
                 view = st.radio("Table view", ["Interactive (sortable, pinned columns)", "Scrollbar on top"],
                                 horizontal=True, label_visibility="collapsed")
                 if view.startswith("Scrollbar"):
@@ -379,13 +384,15 @@ with tab_scan:
                   st.dataframe(v[cols].style.apply(live_row, axis=1), hide_index=True,
                                use_container_width=True, height=min(80 + 36 * len(v), 700), column_config={
                                    "Status": st.column_config.TextColumn(pinned=True),
+                                   "A: wallets / cash / line": st.column_config.TextColumn(width="medium"),
+                                   "B: wallets / cash / line": st.column_config.TextColumn(width="medium"),
                                    "Game": st.column_config.TextColumn(pinned=True),
                                    "Line %": PCT, "Wallets %": PCT, "Cash %": PCT, "Cash − Line (pts)": PTS,
                                    "Play wallets %": PCT, "Play cash %": PCT, "Play line %": PCT,
                                    "A wallets %": PCT, "A cash %": PCT, "A line %": PCT, "A cash $": MONEY,
                                    "B wallets %": PCT, "B cash %": PCT, "B line %": PCT, "B cash $": MONEY,
                                    "Total cash $": MONEY, "Value now $": MONEY, "Wallets": INT})
-                st.caption("Yellow rows are plays, gray rows are live. Money side = side with the most cash. Cash − Line = its share of cash minus the line's "
+                st.caption("Yellow rows are plays, gray rows are live. The “wallets / cash / line” columns show each side’s % of wallets, % of cash and line %. Money side = side with the most cash. Cash − Line = its share of cash minus the line's "
                            "implied probability (positive: more money than the price implies). "
                            "“Partial count” = holder depth cut off, so wallet counts are lower bounds.")
                 st.download_button("Download scan (CSV)", v[cols].to_csv(index=False), "scan.csv", "text/csv")
