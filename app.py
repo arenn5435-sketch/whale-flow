@@ -20,6 +20,7 @@ st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout=
 if getattr(wd, "DATA_VERSION", 0) < 13:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
              "(it should contain the line DATA_VERSION = 13), commit it, then reboot the app from 'Manage app'.")
+    st.code(f"The app is loading: {getattr(wd, '__file__', '?')}\nIts DATA_VERSION: {getattr(wd, 'DATA_VERSION', 'missing')}")
     st.stop()
 
 # ---------- shared formatting ----------
