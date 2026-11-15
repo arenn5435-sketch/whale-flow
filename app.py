@@ -12,15 +12,14 @@ import datetime as dt
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 12:
+if getattr(wd, "DATA_VERSION", 0) < 11:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 12), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 11), commit it, then reboot the app from 'Manage app'.")
     st.stop()
 
 # ---------- shared formatting ----------
@@ -69,32 +68,21 @@ def live_row(row):
 
 
 def top_scroll_table(df: pd.DataFrame):
-    """HTML table with a horizontal scrollbar above AND below it (kept in sync)."""
-    fmt = {"Play wallets %": "{:.0f}%", "Play cash %": "{:.0f}%", "Play line %": "{:.0f}%",
-           "A wallets %": "{:.0f}%", "A cash %": "{:.0f}%", "A line %": "{:.0f}%", "A cash $": "${:,.0f}",
-           "B wallets %": "{:.0f}%", "B cash %": "{:.0f}%", "B line %": "{:.0f}%", "B cash $": "${:,.0f}",
-           "Total cash $": "${:,.0f}", "Value now $": "${:,.0f}", "Wallets": "{:,.0f}"}
-    sty = (df.style.apply(live_row, axis=1)
+    """Static HTML table whose horizontal scrollbar sits ABOVE the table (flip the box, flip the content back)."""
+    fmt = {"Line %": "{:.0f}%", "Wallets %": "{:.0f}%", "Cash %": "{:.0f}%", "Cash − Line (pts)": "{:+.0f}",
+           "Total cash $": "${:,.0f}", "Value now $": "${:,.0f}", "Wallets": "{:,.0f}",
+           "Play wallets %": "{:.0f}%", "Play cash %": "{:.0f}%", "Play line %": "{:.0f}%"}
+    sty = (df.style.apply(live_row, axis=1).map(gap_color, subset=["Cash − Line (pts)"])
            .format({k: v for k, v in fmt.items() if k in df.columns}, na_rep="—").hide(axis="index"))
-    height = min(110 + 34 * len(df), 720)
-    html = """<style>
-      body{margin:0;font-family:sans-serif;color:#262730;background:transparent}
-      @media (prefers-color-scheme: dark){body{color:#fafafa} th{background:#0e1117!important}}
-      #main{overflow:auto;max-height:%dpx}
-      table{border-collapse:collapse;font-size:13px;white-space:nowrap}
-      th{text-align:left;padding:6px 10px;border-bottom:2px solid rgba(128,128,128,.5);position:sticky;top:0;background:#fff}
-      td{padding:5px 10px;border-bottom:1px solid rgba(128,128,128,.2)}
-      #top{overflow-x:auto;overflow-y:hidden;height:16px}
-    </style>
-    <div id="top"><div id="topin" style="height:1px"></div></div>
-    <div id="main">%s</div>
-    <script>
-      const top_=document.getElementById('top'), main=document.getElementById('main'), inner=document.getElementById('topin');
-      const sync=()=>{inner.style.width=main.scrollWidth+'px'};
-      sync(); window.addEventListener('resize',sync); new ResizeObserver(sync).observe(main.firstElementChild);
-      top_.onscroll=()=>{main.scrollLeft=top_.scrollLeft}; main.onscroll=()=>{top_.scrollLeft=main.scrollLeft};
-    </script>""" % (height - 24, sty.to_html())
-    components.html(html, height=height, scrolling=False)
+    st.markdown(
+        """<style>
+        .tscroll{overflow-x:auto;transform:rotateX(180deg);padding:2px 0}
+        .tscroll .inner{transform:rotateX(180deg);display:inline-block;min-width:100%}
+        .tscroll table{border-collapse:collapse;font-size:13px;white-space:nowrap;width:100%}
+        .tscroll th{text-align:left;padding:6px 10px;border-bottom:2px solid rgba(128,128,128,.5)}
+        .tscroll td{padding:5px 10px;border-bottom:1px solid rgba(128,128,128,.2)}
+        </style><div class="tscroll"><div class="inner">""" + sty.to_html() + "</div></div>",
+        unsafe_allow_html=True)
 
 
 def show_sides(df: pd.DataFrame):
@@ -333,7 +321,7 @@ with tab_scan:
                                            "i.e. the price is lower than the money on that side implies.")
                 with st.expander("Play rules (yellow rows)", expanded=False):
                     r1, r2 = st.columns(2)
-                    wmin = r1.number_input("Wallets % from", 0, 100, 0)
+                    wmin = r1.number_input("Wallets % from", 0, 100, 40)
                     wmax = r2.number_input("Wallets % to", 0, 100, 49)
                     st.caption("A side is a play when: its wallets % is in that range, AND its cash % is higher than its "
                                "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %.")
@@ -342,16 +330,6 @@ with tab_scan:
                 df["Play wallets %"] = [p["wallets_pct"] if p else None for p in plays]
                 df["Play cash %"] = [p["cash_pct"] if p else None for p in plays]
                 df["Play line %"] = [p["line_pct"] if p else None for p in plays]
-            if not df.empty:
-                # every side's numbers on the same row, not just the side with the most cash
-                for tag in ("A", "B"):
-                    i = 0 if tag == "A" else 1
-                    pick = [sd[i] if sd and len(sd) > i else {} for sd in df["_sides"]]
-                    df[f"Side {tag}"] = [p.get("side", "") for p in pick]
-                    df[f"{tag} wallets %"] = [p.get("wallets_pct") for p in pick]
-                    df[f"{tag} cash %"] = [p.get("cash_pct") for p in pick]
-                    df[f"{tag} line %"] = [p.get("line_pct") for p in pick]
-                    df[f"{tag} cash $"] = [p.get("cash") for p in pick]
             if df.empty:
                 st.warning("No games with holder data in that window. Widen the hours or pick more leagues.")
             else:
@@ -378,22 +356,20 @@ with tab_scan:
                     v = v.sort_values("Wallets %", ascending=False)
 
                 cols = ["Status", "Sport", "League", "Game", "Market", "Starts", "Play", "Play wallets %", "Play cash %",
-                        "Play line %", "Side A", "A wallets %", "A cash %", "A line %", "A cash $",
-                        "Side B", "B wallets %", "B cash %", "B line %", "B cash $", "Total cash $", "Value now $",
-                        "Wallets", "Crowd side", "Crowd ≠ money", "Partial count"]
-                view = st.radio("Table view", ["Scrollbar on top and bottom", "Interactive (sortable, pinned columns)"],
+                        "Play line %", "Money side", "Line %", "Wallets %",
+                        "Cash %", "Cash − Line (pts)", "Total cash $", "Value now $", "Wallets", "Crowd side",
+                        "Crowd ≠ money", "Partial count"]
+                view = st.radio("Table view", ["Interactive (sortable, pinned columns)", "Scrollbar on top"],
                                 horizontal=True, label_visibility="collapsed")
                 if view.startswith("Scrollbar"):
                     top_scroll_table(v[cols])
                 else:
-                  st.dataframe(v[cols].style.apply(live_row, axis=1), hide_index=True,
+                  st.dataframe(v[cols].style.apply(live_row, axis=1).map(gap_color, subset=["Cash − Line (pts)"]), hide_index=True,
                                use_container_width=True, height=min(80 + 36 * len(v), 700), column_config={
                                    "Status": st.column_config.TextColumn(pinned=True),
                                    "Game": st.column_config.TextColumn(pinned=True),
                                    "Line %": PCT, "Wallets %": PCT, "Cash %": PCT, "Cash − Line (pts)": PTS,
                                    "Play wallets %": PCT, "Play cash %": PCT, "Play line %": PCT,
-                                   "A wallets %": PCT, "A cash %": PCT, "A line %": PCT, "A cash $": MONEY,
-                                   "B wallets %": PCT, "B cash %": PCT, "B line %": PCT, "B cash $": MONEY,
                                    "Total cash $": MONEY, "Value now $": MONEY, "Wallets": INT})
                 st.caption("Yellow rows are plays, gray rows are live. Money side = side with the most cash. Cash − Line = its share of cash minus the line's "
                            "implied probability (positive: more money than the price implies). "
