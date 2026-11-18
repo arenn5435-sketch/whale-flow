@@ -271,8 +271,8 @@ with tab_scan:
             ahead = a1.slider("Show games starting in the next (hours)", 1, 72, 24)
             back = a2.slider("Also show games that started up to (hours ago)", 0, 12, 6)
             depth = a3.slider("Holder depth (pages of 100/side)", 1, 10, 1)
-            max_games = a4.slider("Max games", 5, 100, 30)
-            type_labels = st.multiselect("Bet types", ["Moneyline", "Spread", "Over/Under"], default=["Moneyline"],
+            max_games = a4.slider("Max games", 5, 100, 100)
+            type_labels = st.multiselect("Bet types", ["Moneyline", "Spread", "Over/Under"], default=["Moneyline", "Spread", "Over/Under"],
                                          help="Spread and Over/Under use each game's main (busiest) line.")
             market_types = tuple({"Moneyline": "moneyline", "Spread": "spread", "Over/Under": "total"}[t]
                                  for t in type_labels) or ("moneyline",)
@@ -323,11 +323,13 @@ with tab_scan:
                     r1, r2 = st.columns(2)
                     wmin = r1.number_input("Wallets % from", 0, 100, 40)
                     wmax = r2.number_input("Wallets % to", 0, 100, 49)
+                    min_play_cash = st.number_input("Minimum cash in on the side ($)", 0, 10_000_000, 2000, 500)
                     st.caption("A side is a play when: its wallets % is in that range, AND its cash % is higher than its "
-                               "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %.")
+                               "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %, "
+                               "AND the side has at least the minimum cash in.")
                 def row_is_play(r):
                     one = [{"wallets_pct": r["Wallets %"], "cash_pct": r["Cash %"], "line_pct": r["Line %"]}]
-                    return bool(highlight and find_play(one, wmin, wmax, reverse))
+                    return bool(highlight and (r["Cash $"] or 0) >= min_play_cash and find_play(one, wmin, wmax, reverse))
                 df["Play"] = ["✓" if row_is_play(r) else "" for _, r in df.iterrows()]
             if df.empty:
                 st.warning("No games with holder data in that window. Widen the hours or pick more leagues.")
