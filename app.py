@@ -323,13 +323,11 @@ with tab_scan:
                     r1, r2 = st.columns(2)
                     wmin = r1.number_input("Wallets % from", 0, 100, 40)
                     wmax = r2.number_input("Wallets % to", 0, 100, 49)
-                    min_play_cash = st.number_input("Minimum cash in on the side ($)", 0, 10_000_000, 2000, 500)
                     st.caption("A side is a play when: its wallets % is in that range, AND its cash % is higher than its "
-                               "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %, "
-                               "AND the side has at least the minimum cash in.")
+                               "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %.")
                 def row_is_play(r):
                     one = [{"wallets_pct": r["Wallets %"], "cash_pct": r["Cash %"], "line_pct": r["Line %"]}]
-                    return bool(highlight and (r["Cash $"] or 0) >= min_play_cash and find_play(one, wmin, wmax, reverse))
+                    return bool(highlight and find_play(one, wmin, wmax, reverse))
                 df["Play"] = ["✓" if row_is_play(r) else "" for _, r in df.iterrows()]
             if df.empty:
                 st.warning("No games with holder data in that window. Widen the hours or pick more leagues.")
