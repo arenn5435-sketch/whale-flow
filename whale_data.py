@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 13
+DATA_VERSION = 14
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -492,6 +492,23 @@ def sharp_check(groups: list, sides: list, top_n: int = 10, workers: int = 8):
             "% of checked cash from profitable wallets": 100 * prof_cash / known_cash if known_cash else None,
         })
     return df, pd.DataFrame(summary)
+
+
+def play_sharp(market: dict, top_n: int = 10, max_pages: int = 1, min_shares: float = 1.0) -> dict:
+    """
+    Track record of each side's biggest holders for one market:
+    {side: {"pct": share of checked cash from recently profitable wallets (None if unknown),
+            "profitable": n, "losing": n}}. Empty dict if there are no holders.
+    """
+    sides, groups, _ = side_table(market, min_shares=min_shares, max_pages=max_pages)
+    if not sides or not any(g["holders"] for g in groups):
+        return {}
+    _, summary = sharp_check(groups, sides, top_n=top_n)
+    if summary.empty:
+        return {}
+    return {r["Side"]: {"pct": r["% of checked cash from profitable wallets"],
+                        "profitable": r["Profitable"], "losing": r["Losing"]}
+            for r in summary.to_dict("records")}
 
 
 # ---------------------------------------------------------------------------
