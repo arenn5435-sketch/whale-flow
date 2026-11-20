@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 16
+DATA_VERSION = 17
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -828,25 +828,36 @@ def pick_markets(ev: dict, types=("moneyline",), include_closed: bool = False) -
     return out
 
 
-def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str, pregame=None) -> dict:
+def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str, pregame_sides=None) -> dict:
     league = ev["_league"]
     start = event_start(ev)
     tot_w = sum(s["wallets"] for s in sides)
     tot_c = sum(s["cash"] for s in sides)
     money = max(sides, key=lambda s: s["cash"])
     crowd = max(sides, key=lambda s: s["wallets"])
+    live_game = is_live(ev)
+    if live_game:
+        pre_by_tok = {p["token_id"]: p for p in (pregame_sides or [])}
+        pre_total = sum(p["cash"] for p in pregame_sides) if pregame_sides else None
+        pre_money = max(pregame_sides, key=lambda p: p["cash"])["Side"] if pregame_sides and pre_total else None
+    else:
+        pre_by_tok = {x["token_id"]: {"cash": x["cash"], "cash_pct": x["cash_pct"], "wallet_pct": x["wallet_pct"]} for x in sides}
+        pre_total, pre_money = tot_c, money["Side"]
     return {
         "Sport": league["sport"], "League": league["league"], "Game": ev.get("title"),
         "Market": market_name(m),
         "Status": "LIVE" if is_live(ev) else "Upcoming", "Starts": fmt_local(start, tz),
         "Total cash $": tot_c,
-        # cash held just before the game started (live games: rebuilt from trades; upcoming: it's all pre-game)
-        "Pre-game cash $": pregame if pregame is not None else (None if is_live(ev) else tot_c),
+        # cash held just before the game started (live: rebuilt from trades; upcoming: all current cash is pre-game)
+        "Pre-game cash $": pre_total, "Pre-game money side": pre_money,
         "Crowd side": crowd["Side"], "Crowd ≠ money": crowd is not money, "Partial count": truncated,
         "_start": start, "_live": is_live(ev),
         "_per_side": [{"Side": x["Side"], "Line %": x["line_pct"], "Wallets %": x["wallet_pct"],
                        "Cash %": x["cash_pct"], "Cash − Line (pts)": x["gap"], "Cash $": x["cash"],
-                       "Value now $": x["value"], "Wallets": x["wallets"]} for x in sides],
+                       "Value now $": x["value"], "Wallets": x["wallets"],
+                       "Side pre-game $": (pre_by_tok.get(x["token_id"]) or {}).get("cash"),
+                       "Pre-game cash %": (pre_by_tok.get(x["token_id"]) or {}).get("cash_pct"),
+                       "Pre-game wallets %": (pre_by_tok.get(x["token_id"]) or {}).get("wallet_pct")} for x in sides],
     }
 
 
@@ -908,7 +919,7 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
             return None
         if hide_decided and is_decided([s["price"] for s in sides]):
             return None
-        pregame = None
+        pregame, pre_sides = None, None
         if is_live(ev):
             # how much money was on this game BEFORE it started (in-play money doesn't count)
             try:
@@ -920,8 +931,8 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
                 report["errors"].append(f"{ev.get('title')}: couldn't rebuild pre-game cash ({e})")
             if min_pregame_cash and pregame is not None and pregame < min_pregame_cash:
                 return None
-        return (_scan_row(ev, m, sides, truncated, tz, pregame),
-                {"event": ev, "market": annotate_market(m, ev), "pregame": pregame})
+        return (_scan_row(ev, m, sides, truncated, tz, pre_sides),
+                {"event": ev, "market": annotate_market(m, ev), "pre_sides": pre_sides})
 
     rows, items = [], []
     with ThreadPoolExecutor(workers) as ex:
@@ -944,7 +955,7 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
         def redo(i):
             ev, m = items[i]["event"], items[i]["market"]
             sides, _, trunc = side_table(m, min_shares=min_shares, max_pages=deepen_pages)
-            return i, (_scan_row(ev, m, sides, trunc, tz, items[i].get("pregame")) if sides else None)
+            return i, (_scan_row(ev, m, sides, trunc, tz, items[i].get("pre_sides")) if sides else None)
 
         with ThreadPoolExecutor(workers) as ex:
             futs = [ex.submit(redo, i) for i in big]
@@ -1055,7 +1066,7 @@ def pregame_split(market: dict, start: dt.datetime, min_shares: float = 1.0, row
     sides = []
     for idx, tok in enumerate(tokens):
         held = [(sh, c) for (w, tk), (sh, c) in pos.items() if tk == tok and sh >= min_shares]
-        sides.append({"Side": team_map.get(tok) or (outcomes[idx] if idx < len(outcomes) else tok),
+        sides.append({"token_id": tok, "Side": team_map.get(tok) or (outcomes[idx] if idx < len(outcomes) else tok),
                       "wallets": len(held), "cash": sum(c for _, c in held), "price": last.get(tok)})
     tot_w, tot_c = sum(s["wallets"] for s in sides), sum(s["cash"] for s in sides)
     psum = sum(s["price"] for s in sides) if sides and all(s["price"] is not None for s in sides) else None
