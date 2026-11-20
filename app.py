@@ -17,9 +17,9 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 17:
+if getattr(wd, "DATA_VERSION", 0) < 18:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 17), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 18), commit it, then reboot the app from 'Manage app'.")
     st.code(f"The app is loading: {getattr(wd, '__file__', '?')}\nIts DATA_VERSION: {getattr(wd, 'DATA_VERSION', 'missing')}")
     st.stop()
 
@@ -70,7 +70,8 @@ def top_scroll_table(df: pd.DataFrame):
     """Static HTML table whose horizontal scrollbar sits ABOVE the table (flip the box, flip the content back)."""
     fmt = {"Line %": "{:.0f}%", "Wallets %": "{:.0f}%", "Cash %": "{:.0f}%", "Cash − Line (pts)": "{:+.0f}",
            "Total cash $": "${:,.0f}", "Value now $": "${:,.0f}", "Wallets": "{:,.0f}", "Cash $": "${:,.0f}", "Pre-game cash $": "${:,.0f}", "Side pre-game $": "${:,.0f}",
-           "Pre-game cash %": "{:.0f}%", "Pre-game wallets %": "{:.0f}%"}
+           "Pre-game cash %": "{:.0f}%", "Pre-game wallets %": "{:.0f}%",
+           "Pre-game line %": "{:.0f}%", "Pre-game cash ÷ line": "{:.2f}", "Pre-game Cash − Line (pts)": "{:+.0f}"}
     sty = (df.style.apply(live_row, axis=1).map(gap_color, subset=["Cash − Line (pts)"])
            .format({k: v for k, v in fmt.items() if k in df.columns}, na_rep="—").hide(axis="index"))
     st.markdown(
@@ -403,7 +404,8 @@ with tab_scan:
                     v = v.sort_values("Wallets %", ascending=False)
 
                 cols = ["Status", "Sport", "League", "Game", "Market", "Starts", "Side", "Play", "Money pick", "Line %", "Wallets %",
-                        "Cash %", "Cash − Line (pts)", "Cash $", "Value now $", "Wallets", "Total cash $", "Pre-game cash $", "Pre-game money side", "Side pre-game $", "Pre-game cash %", "Pre-game wallets %",
+                        "Cash %", "Cash − Line (pts)", "Cash $", "Value now $", "Wallets", "Total cash $", "Pre-game cash $", "Pre-game money side", "Side pre-game $", "Pre-game cash %", "Pre-game wallets %", "Pre-game line %",
+                        "Pre-game cash ÷ line", "Pre-game Cash − Line (pts)",
                         "Crowd side", "Crowd ≠ money", "Partial count"]
                 view = st.radio("Table view", ["Interactive (sortable, pinned columns)", "Scrollbar on top"],
                                 horizontal=True, label_visibility="collapsed")
@@ -416,7 +418,9 @@ with tab_scan:
                                    "Game": st.column_config.TextColumn(pinned=True),
                                    "Line %": PCT, "Wallets %": PCT, "Cash %": PCT, "Cash − Line (pts)": PTS,
                                                                       "Cash $": MONEY, "Total cash $": MONEY, "Pre-game cash $": MONEY, "Side pre-game $": MONEY,
-                                                                      "Pre-game cash %": PCT, "Pre-game wallets %": PCT, "Value now $": MONEY, "Wallets": INT})
+                                                                      "Pre-game cash %": PCT, "Pre-game wallets %": PCT, "Pre-game line %": PCT,
+                                                                      "Pre-game cash ÷ line": st.column_config.NumberColumn(format="%.2f"),
+                                                                      "Pre-game Cash − Line (pts)": PTS, "Value now $": MONEY, "Wallets": INT})
                 st.caption("Each game has one row per side; a ✓ in Play marks a side that meets the wallet-% rules. "
                            "Money pick = the side of that game with the most cash in (a description of where the money is, "
                            "not a recommendation). Cash − Line = its share of cash minus the line's "

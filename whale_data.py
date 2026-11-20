@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 17
+DATA_VERSION = 18
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -828,6 +828,14 @@ def pick_markets(ev: dict, types=("moneyline",), include_closed: bool = False) -
     return out
 
 
+def _ratio(cash_pct, line_pct):
+    return (cash_pct / line_pct) if (cash_pct is not None and line_pct) else None
+
+
+def _gap(cash_pct, line_pct):
+    return (cash_pct - line_pct) if (cash_pct is not None and line_pct is not None) else None
+
+
 def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str, pregame_sides=None) -> dict:
     league = ev["_league"]
     start = event_start(ev)
@@ -841,7 +849,8 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str, pregame_
         pre_total = sum(p["cash"] for p in pregame_sides) if pregame_sides else None
         pre_money = max(pregame_sides, key=lambda p: p["cash"])["Side"] if pregame_sides and pre_total else None
     else:
-        pre_by_tok = {x["token_id"]: {"cash": x["cash"], "cash_pct": x["cash_pct"], "wallet_pct": x["wallet_pct"]} for x in sides}
+        pre_by_tok = {x["token_id"]: {"cash": x["cash"], "cash_pct": x["cash_pct"], "wallet_pct": x["wallet_pct"],
+                                             "line_pct": x["line_pct"]} for x in sides}
         pre_total, pre_money = tot_c, money["Side"]
     return {
         "Sport": league["sport"], "League": league["league"], "Game": ev.get("title"),
@@ -857,7 +866,12 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str, pregame_
                        "Value now $": x["value"], "Wallets": x["wallets"],
                        "Side pre-game $": (pre_by_tok.get(x["token_id"]) or {}).get("cash"),
                        "Pre-game cash %": (pre_by_tok.get(x["token_id"]) or {}).get("cash_pct"),
-                       "Pre-game wallets %": (pre_by_tok.get(x["token_id"]) or {}).get("wallet_pct")} for x in sides],
+                       "Pre-game wallets %": (pre_by_tok.get(x["token_id"]) or {}).get("wallet_pct"),
+                       "Pre-game line %": (pre_by_tok.get(x["token_id"]) or {}).get("line_pct"),
+                       "Pre-game cash ÷ line": _ratio((pre_by_tok.get(x["token_id"]) or {}).get("cash_pct"),
+                                                      (pre_by_tok.get(x["token_id"]) or {}).get("line_pct")),
+                       "Pre-game Cash − Line (pts)": _gap((pre_by_tok.get(x["token_id"]) or {}).get("cash_pct"),
+                                                          (pre_by_tok.get(x["token_id"]) or {}).get("line_pct"))} for x in sides],
     }
 
 
