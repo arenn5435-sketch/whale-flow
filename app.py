@@ -62,10 +62,8 @@ def find_play(sides, wmin, wmax, reverse=False):
 
 
 def live_row(row):
-    """Light gray wash across the whole row for live games (works in light and dark themes)."""
-    if row.get("Play"):
-        return ["background-color: rgba(255,215,0,0.45)"] * len(row)
-    return ["background-color: rgba(128,128,128,0.25)" if row["Status"] == "LIVE" else ""] * len(row)
+    """No row shading (kept so the table styling calls stay simple)."""
+    return [""] * len(row)
 
 
 def top_scroll_table(df: pd.DataFrame):
@@ -361,16 +359,14 @@ with tab_scan:
             if report["markets"] > report["analyzed"] + len(report["errors"]) and report["markets"] > 0:
                 st.caption("Raise “Max games” to cover the rest; games with no holders yet are skipped.")
             if not df.empty:
-                k1, k2 = st.columns(2)
-                highlight = k1.checkbox("Highlight plays in yellow", True)
-                reverse = k2.checkbox("Reverse the line rule (line at or below cash %)", False,
+                reverse = st.checkbox("Reverse the line rule (line at or below cash %)", False,
                                       help="Off: line % must be at least the cash %. On: line % must be at or below the cash %, "
                                            "i.e. the price is lower than the money on that side implies.")
-                use_sharp = st.checkbox("Pick using wallet track records on plays (slower)", True,
-                                        help="For each yellow play, checks the biggest holders on both sides and picks the side "
+                use_sharp = st.checkbox("Pick using wallet track records (much slower)", False,
+                                        help="For every game, checks the biggest holders on both sides and picks the side "
                                              "with more of its cash coming from wallets that have been profitable recently. "
                                              "Off: the pick is simply the side with the most cash.")
-                with st.expander("Play rules (yellow rows)", expanded=False):
+                with st.expander("Play rules (wallet % filter)", expanded=False):
                     r1, r2 = st.columns(2)
                     wmin = r1.number_input("Wallets % from", 0, 100, 40)
                     wmax = r2.number_input("Wallets % to", 0, 100, 49)
@@ -378,21 +374,20 @@ with tab_scan:
                                "wallets %, AND the line % is " + ("at most" if reverse else "at least") + " its cash %.")
                 def row_is_play(r):
                     one = [{"wallets_pct": r["Wallets %"], "cash_pct": r["Cash %"], "line_pct": r["Line %"]}]
-                    return bool(highlight and find_play(one, wmin, wmax, reverse))
+                    return bool(find_play(one, wmin, wmax, reverse))
                 df["Play"] = ["✓" if row_is_play(r) else "" for _, r in df.iterrows()]
-                # Pick on play rows: by wallet track record (profitable-cash share) or, if off, by most cash
+                # Pick for every game: by wallet track record (profitable-cash share) or, if off, by most cash
                 df["Money pick"] = ""
                 df["Rating"] = ""
                 df["Profitable cash %"] = None
                 df["Wallets W / L"] = ""
                 play_games = {}
                 for idx, r in df.iterrows():
-                    if r["Play"]:
-                        play_games.setdefault((r["Game"], r["Market"]), idx)
+                    play_games.setdefault((r["Game"], r["Market"]), idx)
                 sharp = {}
                 if use_sharp and play_games:
                     from concurrent.futures import ThreadPoolExecutor
-                    with st.spinner(f"Checking wallet track records for {len(play_games)} play game(s)…"):
+                    with st.spinner(f"Checking wallet track records for {len(play_games)} game(s)…"):
                         def one(kv):
                             try:
                                 return kv[0], c_sharp(items[kv[1]]["market"], 10)
@@ -417,7 +412,7 @@ with tab_scan:
                         pick_note = ""
                     # rating (out of 5) for the picked side: share of checks it passes
                     prow = rows_g[rows_g["Side"] == pick]
-                    prow = prow.iloc[0] if len(prow) else rows_g[rows_g["Play"] != ""].iloc[0]
+                    prow = prow.iloc[0] if len(prow) else rows_g.iloc[0]
                     # four checks; ones that can't be evaluated (no track record) count as not passed
                     pc = df.at[prow.name, "Profitable cash %"]
                     others = [x for x in rows_g.loc[rows_g.index != prow.name, "Profitable cash %"] if pd.notna(x)]
@@ -428,16 +423,15 @@ with tab_scan:
                         bool(use_sharp and pd.notna(pc) and others and pc - max(others) >= 20),
                     ]
                     stars = int(5 * sum(checks) / 4 + 0.5)
-                    for j, r in rows_g.iterrows():
-                        if r["Play"]:
-                            df.at[j, "Money pick"] = pick + pick_note
-                            df.at[j, "Rating"] = "★" * stars + "☆" * (5 - stars)
+                    for j in rows_g.index:
+                        df.at[j, "Money pick"] = pick + pick_note
+                        df.at[j, "Rating"] = "★" * stars + "☆" * (5 - stars)
             if df.empty:
                 st.warning("No games with holder data in that window. Widen the hours or pick more leagues.")
             else:
                 f1, f2, f3 = st.columns(3)
                 only_div = f1.checkbox("Only crowd ≠ money")
-                only_plays = f1.checkbox("Only plays (yellow)")
+                only_plays = f1.checkbox("Only plays (wallet % rules)")
                 min_cash = f2.number_input("Min total cash $", 0, 10_000_000, 500, 100)
                 sort_by = f3.selectbox("Sort by", ["Live first, then cash", "Biggest |cash − line|", "Most cash",
                                                    "Cash %", "Wallets %"])
@@ -471,7 +465,7 @@ with tab_scan:
                                    "Game": st.column_config.TextColumn(pinned=True),
                                    "Line %": PCT, "Wallets %": PCT, "Cash %": PCT, "Cash − Line (pts)": PTS,
                                                                       "Cash $": MONEY, "Profitable cash %": PCT, "Total cash $": MONEY, "Value now $": MONEY, "Wallets": INT})
-                st.caption("Yellow rows are plays, gray rows are live. Each game has one row per side. Money pick (yellow rows; * = no wallet history was available, so it is the side with the most cash) = the side with more of its biggest holders’ cash coming from recently profitable wallets (or the side with the most cash if track records are off). Wallets W / L = profitable / losing wallets among the top holders. Rating (out of 5) = share of these checks the pick passes: cash % at least 3 points above wallets %; at least $1,000 cash in on that side; at least 55% of its checked cash from profitable wallets; and at least 20 points more profitable-cash share than the other side (the last two need track records on; checks that can\u2019t be evaluated count as not passed, so with track records off the most a play can get is 3 stars). It describes where the money is, not a recommendation. Cash − Line = its share of cash minus the line's "
+                st.caption("Each game has one row per side; a ✓ in Play marks a side that meets the wallet-% rules. Money pick (shown on both rows of every game; * = no wallet history was available, so it is the side with the most cash) = the side with more of its biggest holders’ cash coming from recently profitable wallets (or the side with the most cash if track records are off). Wallets W / L = profitable / losing wallets among the top holders. Rating (out of 5) = share of these checks the pick passes: cash % at least 3 points above wallets %; at least $1,000 cash in on that side; at least 55% of its checked cash from profitable wallets; and at least 20 points more profitable-cash share than the other side (the last two need track records on; checks that can\u2019t be evaluated count as not passed, so with track records off the most a play can get is 3 stars). It describes where the money is, not a recommendation. Cash − Line = its share of cash minus the line's "
                            "implied probability (positive: more money than the price implies). "
                            "“Partial count” = holder depth cut off, so wallet counts are lower bounds.")
                 st.download_button("Download scan (CSV)", v[cols].to_csv(index=False), "scan.csv", "text/csv")
