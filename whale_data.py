@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 15
+DATA_VERSION = 16
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -828,7 +828,7 @@ def pick_markets(ev: dict, types=("moneyline",), include_closed: bool = False) -
     return out
 
 
-def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
+def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str, pregame=None) -> dict:
     league = ev["_league"]
     start = event_start(ev)
     tot_w = sum(s["wallets"] for s in sides)
@@ -840,6 +840,8 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
         "Market": market_name(m),
         "Status": "LIVE" if is_live(ev) else "Upcoming", "Starts": fmt_local(start, tz),
         "Total cash $": tot_c,
+        # cash held just before the game started (live games: rebuilt from trades; upcoming: it's all pre-game)
+        "Pre-game cash $": pregame if pregame is not None else (None if is_live(ev) else tot_c),
         "Crowd side": crowd["Side"], "Crowd ≠ money": crowd is not money, "Partial count": truncated,
         "_start": start, "_live": is_live(ev),
         "_per_side": [{"Side": x["Side"], "Line %": x["line_pct"], "Wallets %": x["wallet_pct"],
@@ -851,7 +853,7 @@ def _scan_row(ev: dict, m: dict, sides: list, truncated: bool, tz: str) -> dict:
 def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, depth_pages: int = 1,
                min_shares: float = 1.0, max_games: int = 40, workers: int = 8, tz: str = DEFAULT_TZ,
                progress=None, deepen_top: int = 0, deepen_pages: int = 10, status: str = "all",
-               market_types=("moneyline",), hide_decided: bool = True):
+               market_types=("moneyline",), hide_decided: bool = True, min_pregame_cash: float = 0.0):
     """
     Scan the given leagues for live / soon-starting games and summarise each
     game's moneyline market (wallets vs cash vs line). Two phases: find games
@@ -906,7 +908,20 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
             return None
         if hide_decided and is_decided([s["price"] for s in sides]):
             return None
-        return _scan_row(ev, m, sides, truncated, tz), {"event": ev, "market": annotate_market(m, ev)}
+        pregame = None
+        if is_live(ev):
+            # how much money was on this game BEFORE it started (in-play money doesn't count)
+            try:
+                start = event_start(ev)
+                if start is not None:
+                    pre_sides, _ = pregame_split(m, start)
+                    pregame = sum(x["cash"] for x in pre_sides)
+            except Exception as e:
+                report["errors"].append(f"{ev.get('title')}: couldn't rebuild pre-game cash ({e})")
+            if min_pregame_cash and pregame is not None and pregame < min_pregame_cash:
+                return None
+        return (_scan_row(ev, m, sides, truncated, tz, pregame),
+                {"event": ev, "market": annotate_market(m, ev), "pregame": pregame})
 
     rows, items = [], []
     with ThreadPoolExecutor(workers) as ex:
@@ -929,7 +944,7 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
         def redo(i):
             ev, m = items[i]["event"], items[i]["market"]
             sides, _, trunc = side_table(m, min_shares=min_shares, max_pages=deepen_pages)
-            return i, (_scan_row(ev, m, sides, trunc, tz) if sides else None)
+            return i, (_scan_row(ev, m, sides, trunc, tz, items[i].get("pregame")) if sides else None)
 
         with ThreadPoolExecutor(workers) as ex:
             futs = [ex.submit(redo, i) for i in big]
