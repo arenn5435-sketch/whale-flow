@@ -438,7 +438,7 @@ with tab_scan:
                 f1, f2, f3 = st.columns(3)
                 only_div = f1.checkbox("Only crowd ≠ money")
                 only_plays = f1.checkbox("Only plays (yellow)")
-                min_cash = f2.number_input("Min total cash $", 0, 10_000_000, 0, 1000)
+                min_cash = f2.number_input("Min total cash $", 0, 10_000_000, 500, 100)
                 sort_by = f3.selectbox("Sort by", ["Live first, then cash", "Biggest |cash − line|", "Most cash",
                                                    "Cash %", "Wallets %"])
                 v = df.copy()
