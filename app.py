@@ -298,7 +298,8 @@ with tab_scan:
                 lo_ = dt.datetime.combine(_today, dt.time.min, ZoneInfo(tz)).astimezone(dt.timezone.utc)
                 with st.spinner("Scoring today's finished games…"):
                     try:
-                        _df, _sum, _rep = wd.day_scorecard(chosen_, lo_, dt.datetime.now(dt.timezone.utc), min_cash=500, tz=tz)
+                        _df, _sum, _rep = wd.day_scorecard(chosen_, lo_, dt.datetime.now(dt.timezone.utc), min_cash=500, tz=tz,
+                                                                  market_types=("moneyline", "spread", "total"))
                         st.session_state["day_banner"] = {"day": _today, "sports": list(_sports_now), "summary": _sum,
                                                           "at": dt.datetime.now(dt.timezone.utc)}
                         st.rerun()
@@ -409,9 +410,11 @@ with tab_scan:
                                 df.at[j, "Profitable cash %"] = d["pct"]
                                 df.at[j, "Wallets W / L"] = f"{d['profitable']} / {d['losing']}"
                         known = {sd: d["pct"] for sd, d in info.items() if d.get("pct") is not None}
-                        pick = max(known, key=known.get) if known else "— (no history)"
+                        pick = max(known, key=known.get) if known else rows_g.loc[rows_g["Cash $"].idxmax(), "Side"]
+                        pick_note = "" if known else " *"      # * = no wallet history, so picked by most cash
                     else:
                         pick = rows_g.loc[rows_g["Cash $"].idxmax(), "Side"]
+                        pick_note = ""
                     # rating (out of 5) for the picked side: share of checks it passes
                     prow = rows_g[rows_g["Side"] == pick]
                     prow = prow.iloc[0] if len(prow) else rows_g[rows_g["Play"] != ""].iloc[0]
@@ -427,7 +430,7 @@ with tab_scan:
                     stars = int(5 * sum(checks) / 4 + 0.5)
                     for j, r in rows_g.iterrows():
                         if r["Play"]:
-                            df.at[j, "Money pick"] = pick
+                            df.at[j, "Money pick"] = pick + pick_note
                             df.at[j, "Rating"] = "★" * stars + "☆" * (5 - stars)
             if df.empty:
                 st.warning("No games with holder data in that window. Widen the hours or pick more leagues.")
@@ -468,7 +471,7 @@ with tab_scan:
                                    "Game": st.column_config.TextColumn(pinned=True),
                                    "Line %": PCT, "Wallets %": PCT, "Cash %": PCT, "Cash − Line (pts)": PTS,
                                                                       "Cash $": MONEY, "Profitable cash %": PCT, "Total cash $": MONEY, "Value now $": MONEY, "Wallets": INT})
-                st.caption("Yellow rows are plays, gray rows are live. Each game has one row per side. Money pick (yellow rows) = the side with more of its biggest holders’ cash coming from recently profitable wallets (or the side with the most cash if track records are off). Wallets W / L = profitable / losing wallets among the top holders. Rating (out of 5) = share of these checks the pick passes: cash % at least 3 points above wallets %; at least $1,000 cash in on that side; at least 55% of its checked cash from profitable wallets; and at least 20 points more profitable-cash share than the other side (the last two need track records on; checks that can\u2019t be evaluated count as not passed, so with track records off the most a play can get is 3 stars). It describes where the money is, not a recommendation. Cash − Line = its share of cash minus the line's "
+                st.caption("Yellow rows are plays, gray rows are live. Each game has one row per side. Money pick (yellow rows; * = no wallet history was available, so it is the side with the most cash) = the side with more of its biggest holders’ cash coming from recently profitable wallets (or the side with the most cash if track records are off). Wallets W / L = profitable / losing wallets among the top holders. Rating (out of 5) = share of these checks the pick passes: cash % at least 3 points above wallets %; at least $1,000 cash in on that side; at least 55% of its checked cash from profitable wallets; and at least 20 points more profitable-cash share than the other side (the last two need track records on; checks that can\u2019t be evaluated count as not passed, so with track records off the most a play can get is 3 stars). It describes where the money is, not a recommendation. Cash − Line = its share of cash minus the line's "
                            "implied probability (positive: more money than the price implies). "
                            "“Partial count” = holder depth cut off, so wallet counts are lower bounds.")
                 st.download_button("Download scan (CSV)", v[cols].to_csv(index=False), "scan.csv", "text/csv")
@@ -495,7 +498,7 @@ with tab_scan:
 with tab_day:
     st.caption("For a day's finished games: rebuilds who held what just before each game started, then checks whether "
                "the side with the most cash (money side) or the side with the most wallets (crowd side) won. "
-               "Moneyline games with two named sides only. Positions are rebuilt from trade history, so they are close, not exact.")
+               "Moneyline, spread and over/under markets with two sides (soccer's three-way Yes/No markets are skipped). Positions are rebuilt from trade history, so they are close, not exact.")
     try:
         day_leagues = c_leagues()
     except Exception as e:
@@ -509,8 +512,15 @@ with tab_day:
             d1, d2, d3 = st.columns([1, 2, 1])
             day = d1.date_input("Day", today_local)
             day_sports = sorted({l["sport"] for l in day_leagues})
-            pick_day_sports = d2.multiselect("Sports", day_sports, default=day_sports[:1], key="day_sports")
+            pick_day_sports = d2.multiselect(
+                "Sports", day_sports, key="day_sports",
+                default=[x for x in day_sports if x in ("Basketball", "Football", "Hockey", "Tennis")] or day_sports[:1])
             min_pre = d3.number_input("Min pre-game cash $", 0, 10_000_000, 500, 100)
+            day_type_labels = st.multiselect("Bet types", ["Moneyline", "Spread", "Over/Under"],
+                                             default=["Moneyline", "Spread", "Over/Under"], key="day_types",
+                                             help="Spread and Over/Under use each game's main (busiest) line.")
+            day_types = tuple({"Moneyline": "moneyline", "Spread": "spread", "Over/Under": "total"}[t]
+                              for t in day_type_labels) or ("moneyline",)
             run_day = st.form_submit_button("Score the day", type="primary")
 
         if run_day:
@@ -527,7 +537,7 @@ with tab_day:
                     bar.progress(min(done / max(total, 1), 1.0), text=f"{text}: {done}/{total}")
 
                 try:
-                    st.session_state["day_result"] = (*wd.day_scorecard(chosen, lo, hi, min_cash=min_pre, tz=tz,
+                    st.session_state["day_result"] = (*wd.day_scorecard(chosen, lo, hi, min_cash=min_pre, tz=tz, market_types=day_types,
                                                                         progress=prog_day), day)
                 except Exception as e:
                     st.error(f"Scorecard failed: {e}")
