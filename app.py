@@ -17,9 +17,9 @@ import whale_data as wd
 
 st.set_page_config(page_title="Polymarket Whale Flow", page_icon="🐋", layout="wide")
 
-if getattr(wd, "DATA_VERSION", 0) < 14:
+if getattr(wd, "DATA_VERSION", 0) < 15:
     st.error("whale_data.py in this app is an old version. Replace it with the latest whale_data.py "
-             "(it should contain the line DATA_VERSION = 14), commit it, then reboot the app from 'Manage app'.")
+             "(it should contain the line DATA_VERSION = 15), commit it, then reboot the app from 'Manage app'.")
     st.code(f"The app is loading: {getattr(wd, '__file__', '?')}\nIts DATA_VERSION: {getattr(wd, 'DATA_VERSION', 'missing')}")
     st.stop()
 
@@ -135,7 +135,7 @@ with st.sidebar:
                "Value now = those shares at the current price.")
 
 st.title("🐋 Polymarket whale flow")
-tab_game, tab_scan = st.tabs(["Analyze a game", "Scan leagues"])
+tab_game, tab_scan, tab_day = st.tabs(["Analyze a game", "Scan leagues", "Day scorecard"])
 
 
 # =====================================================================
@@ -264,10 +264,51 @@ with tab_scan:
         st.error(f"Couldn't load the league list: {e}")
 
     if leagues:
+        # ---- day banner: is today a money-side day or a crowd-side day? ----
+        from zoneinfo import ZoneInfo
+        _sports_now = st.session_state.get("scan_sports") or [x for x in sorted({l["sport"] for l in leagues})
+                                                              if x in ("Basketball", "Football", "Hockey", "Tennis")]
+        _today = dt.datetime.now(ZoneInfo(tz)).date()
+        with st.container(border=True):
+            b1, b2 = st.columns([5, 1])
+            banner = st.session_state.get("day_banner")
+            if banner and banner["day"] == _today and banner["summary"]:
+                s_ = banner["summary"]
+                mw, cw, n_ = s_["money_won_split"], s_["crowd_won_split"], s_["split_games"]
+                if n_ < 3:
+                    head, rec = "Too early to call", f"only {n_} game(s) where the money and the crowd disagreed so far"
+                elif mw > cw:
+                    head, rec = "Money day", f"Money games are {mw}-{cw} straight up"
+                elif cw > mw:
+                    head, rec = "Crowd day", f"Crowd games are {cw}-{mw} straight up"
+                else:
+                    head, rec = "Split day", f"Crowd games are {cw}-{mw} straight up"
+                b1.markdown(f"### Day: {head} ({rec})")
+                b1.caption(f"Finished games today in {', '.join(banner['sports'])}: money side and crowd side compared "
+                           f"on the {n_} games where they picked different teams · {s_['games']} games scored · "
+                           f"updated {wd.fmt_local(banner['at'], tz)}")
+            elif banner and banner["day"] == _today:
+                b1.markdown("### Day: no finished games to score yet")
+                b1.caption(f"Sports checked: {', '.join(banner['sports'])}")
+            else:
+                b1.markdown("### Day: not scored yet")
+                b1.caption("Press “Update day record” to score today's finished games for the sports picked below.")
+            if b2.button("Update day record"):
+                chosen_ = [l for l in leagues if l["sport"] in _sports_now]
+                lo_ = dt.datetime.combine(_today, dt.time.min, ZoneInfo(tz)).astimezone(dt.timezone.utc)
+                with st.spinner("Scoring today's finished games…"):
+                    try:
+                        _df, _sum, _rep = wd.day_scorecard(chosen_, lo_, dt.datetime.now(dt.timezone.utc), min_cash=500, tz=tz)
+                        st.session_state["day_banner"] = {"day": _today, "sports": list(_sports_now), "summary": _sum,
+                                                          "at": dt.datetime.now(dt.timezone.utc)}
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Day record failed: {e}")
+
         sports = sorted({l["sport"] for l in leagues})
         with st.form("scan_form"):
             s1, s2 = st.columns(2)
-            pick_sports = s1.multiselect("Sports", sports, default=[x for x in sports if x in ("Basketball", "Football", "Hockey", "Tennis")] or sports[:1])
+            pick_sports = s1.multiselect("Sports", sports, default=[x for x in sports if x in ("Basketball", "Football", "Hockey", "Tennis")] or sports[:1], key="scan_sports")
             league_opts = [l for l in leagues if l["sport"] in pick_sports] if pick_sports else leagues
             pick_leagues = s2.multiselect("Leagues (blank = all in the chosen sports)",
                                           [f"{l['sport']} · {l['league']}" for l in league_opts])
@@ -445,3 +486,87 @@ with tab_scan:
                 with st.expander(f"Diagnostics ({len(report['errors'])} errors)"):
                     for e in report["errors"][:50]:
                         st.text(e)
+
+
+
+# =====================================================================
+# TAB 3 -- day scorecard: money-side day or crowd-side day?
+# =====================================================================
+with tab_day:
+    st.caption("For a day's finished games: rebuilds who held what just before each game started, then checks whether "
+               "the side with the most cash (money side) or the side with the most wallets (crowd side) won. "
+               "Moneyline games with two named sides only. Positions are rebuilt from trade history, so they are close, not exact.")
+    try:
+        day_leagues = c_leagues()
+    except Exception as e:
+        day_leagues = []
+        st.error(f"Couldn't load the league list: {e}")
+
+    if day_leagues:
+        from zoneinfo import ZoneInfo
+        today_local = dt.datetime.now(ZoneInfo(tz)).date()
+        with st.form("day_form"):
+            d1, d2, d3 = st.columns([1, 2, 1])
+            day = d1.date_input("Day", today_local)
+            day_sports = sorted({l["sport"] for l in day_leagues})
+            pick_day_sports = d2.multiselect("Sports", day_sports, default=day_sports[:1], key="day_sports")
+            min_pre = d3.number_input("Min pre-game cash $", 0, 10_000_000, 500, 100)
+            run_day = st.form_submit_button("Score the day", type="primary")
+
+        if run_day:
+            chosen = [l for l in day_leagues if l["sport"] in pick_day_sports]
+            if not chosen:
+                st.warning("Pick at least one sport.")
+            else:
+                tzinfo = ZoneInfo(tz)
+                lo = dt.datetime.combine(day, dt.time.min, tzinfo).astimezone(dt.timezone.utc)
+                hi = lo + dt.timedelta(days=1)
+                bar = st.progress(0.0, text="Starting…")
+
+                def prog_day(done, total, text):
+                    bar.progress(min(done / max(total, 1), 1.0), text=f"{text}: {done}/{total}")
+
+                try:
+                    st.session_state["day_result"] = (*wd.day_scorecard(chosen, lo, hi, min_cash=min_pre, tz=tz,
+                                                                        progress=prog_day), day)
+                except Exception as e:
+                    st.error(f"Scorecard failed: {e}")
+                bar.empty()
+
+        res_day = st.session_state.get("day_result")
+        if res_day:
+            ddf, dsum, drep, dday = res_day
+            st.caption(f"{dday} · {drep['leagues']} leagues · {drep['events']} finished games found · "
+                       f"{drep['scored']} scored")
+            if ddf.empty:
+                st.warning("No finished games could be scored for that day. Try another day or more sports, or lower the "
+                           "minimum cash.")
+            else:
+                st.subheader(dsum["verdict"])
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Money side won", f"{dsum['money_win_rate']:.0f}%", f"{dsum['money_won_split']} of {dsum['split_games']} split games", delta_color="off")
+                m2.metric("Crowd side won", f"{dsum['crowd_win_rate']:.0f}%", f"{dsum['crowd_won_split']} of {dsum['split_games']} split games", delta_color="off")
+                m3.metric("Favorite won", f"{dsum['favorite_win_rate']:.0f}%" if dsum["favorite_win_rate"] is not None else "—")
+                m4.metric("Games scored", dsum["games"])
+                st.caption("The big percentages cover every scored game. The “split games” counts are games where the money "
+                           "side and crowd side were different teams. Those are what decide the verdict. "
+                           "A single day is a small sample, so treat it as a description, not a trend.")
+                show = ddf.drop(columns=["_start"])
+
+                def day_style(row):
+                    if row["Money ≠ crowd"]:
+                        return ["background-color: rgba(46,160,67,0.25)" if row["Money won"] else
+                                "background-color: rgba(70,130,220,0.25)"] * len(row)
+                    return [""] * len(row)
+
+                st.dataframe(show.style.apply(day_style, axis=1), hide_index=True, use_container_width=True,
+                             column_config={"Pre-game cash $": MONEY, "Money cash %": PCT, "Crowd wallets %": PCT,
+                                            "Favorite line %": PCT})
+                st.caption("Green rows: money and crowd disagreed and the money side won. Blue rows: they disagreed and "
+                           "the crowd side won. Plain rows: both pointed at the same team. “Partial trades” = the trade "
+                           "history was cut off, so that game's pre-game split is incomplete.")
+                st.download_button("Download scorecard (CSV)", show.to_csv(index=False), "day_scorecard.csv", "text/csv")
+        if res_day and res_day[2]["errors"]:
+            with st.expander(f"Diagnostics ({len(res_day[2]['errors'])} errors)"):
+                for e in res_day[2]["errors"][:50]:
+                    st.text(e)

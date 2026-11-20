@@ -33,7 +33,7 @@ import requests
 
 import whale_flow as wf
 
-DATA_VERSION = 14
+DATA_VERSION = 15
 DEFAULT_TZ = "America/Edmonton"
 POLY_EVENT_URL = "https://polymarket.com/event/"
 
@@ -803,13 +803,13 @@ def _pick_main_line(ms: list):
     return max(ms, key=lambda m: (m.get("volumeNum") or 0, m.get("liquidityNum") or 0)) if ms else None
 
 
-def pick_markets(ev: dict, types=("moneyline",)) -> list:
+def pick_markets(ev: dict, types=("moneyline",), include_closed: bool = False) -> list:
     """
     Markets of an event for the requested types. Moneyline: up to 3 (soccer
     splits home / draw / away), else the biggest two-sided non-Yes/No market.
     Spread / total: the main (busiest) line only.
     """
-    ms = [m for m in ev.get("markets") or [] if m.get("conditionId") and not m.get("closed")]
+    ms = [m for m in ev.get("markets") or [] if m.get("conditionId") and (include_closed or not m.get("closed"))]
     out = []
     if "moneyline" in types:
         main = [m for m in ms if _kind(m) == "moneyline"]
@@ -955,3 +955,187 @@ def scan_games(leagues: list, hours_ahead: float = 24, hours_back: float = 8, de
                 flat_items.append(item)
         df, items = pd.DataFrame(flat), flat_items
     return df, items, report
+
+
+# ---------------------------------------------------------------------------
+# day scorecard: did the money side or the crowd side win today's finished games?
+# ---------------------------------------------------------------------------
+
+def fetch_finished_events(league: dict, lo: dt.datetime, hi: dt.datetime, max_pages: int = 5):
+    """Finished games in one league that started inside [lo, hi]. Returns (events, errors)."""
+    errors, seen = [], {}
+    base = {"closed": "true", "limit": 100, "start_time_min": _iso(lo), "start_time_max": _iso(hi)}
+
+    def run(extra: dict):
+        cursor = None
+        for _ in range(max_pages):
+            params = {**base, **extra}
+            if cursor:
+                params["after_cursor"] = cursor
+            try:
+                body = _gamma("/events/keyset", params)
+            except Exception as e:
+                errors.append(f"{league['league']}: {e}")
+                return
+            for ev in body.get("events") or []:
+                seen[str(ev.get("id"))] = ev
+            cursor = body.get("next_cursor")
+            if not cursor:
+                return
+
+    run({"tag_id": league["league_tag"]})
+    if not seen and league.get("series"):
+        run({"series_id": league["series"]})
+    keep = []
+    for ev in seen.values():
+        start = event_start(ev)
+        if start is None or not (lo <= start <= hi):      # filter client-side in case the server ignored the window
+            continue
+        if not (ev.get("closed") or ev.get("ended")):
+            continue
+        ev["_league"] = league
+        keep.append(ev)
+    return keep, errors
+
+
+def market_winner(market: dict):
+    """Index of the winning outcome once the market has resolved (a price at 99c+), else None (unresolved / voided)."""
+    prices = market_prices(market)
+    if prices and all(p is not None for p in prices) and max(prices) >= 0.99:
+        return prices.index(max(prices))
+    return None
+
+
+def pregame_split(market: dict, start: dt.datetime, min_shares: float = 1.0, row_ceiling: int = 60000):
+    """
+    Rebuild who held what just BEFORE the game started, from the market's trade
+    history (a finished market's live holder list isn't reliable once people
+    redeem). Walks each wallet's trades up to the start time with average-cost
+    accounting: a buy adds shares and cost, a sell removes shares at the
+    average price. Approximation: it can't see transfers, splits or merges.
+    Returns (sides, truncated); sides follow the market's outcome order.
+    """
+    params = {"condition": market["conditionId"], "limit": 1000, "taker_only": "false"}
+    trades, truncated = wf._paginate("/trades", params, max_rows=row_ceiling)
+    cutoff = start.timestamp()
+    tokens = [str(t) for t in _as_list(market.get("clobTokenIds"))]
+    outcomes = _as_list(market.get("outcomes"))
+    team_map = wf.build_token_team_map(market)
+
+    pre = sorted((t for t in trades if int(t.get("timestamp") or 0) < cutoff), key=lambda t: int(t["timestamp"]))
+    pos, last = {}, {}
+    for t in pre:
+        tok, w = str(t.get("token_id")), t.get("proxy_wallet")
+        size, px = float(t.get("size", 0)), float(t.get("price", 0))
+        p = pos.setdefault((w, tok), [0.0, 0.0])          # [shares, cost]
+        if t.get("side") == "BUY":
+            p[0] += size
+            p[1] += size * px
+        elif p[0] > 0:
+            take = min(size, p[0])
+            p[1] -= take * (p[1] / p[0])
+            p[0] -= take
+        last[tok] = px
+
+    sides = []
+    for idx, tok in enumerate(tokens):
+        held = [(sh, c) for (w, tk), (sh, c) in pos.items() if tk == tok and sh >= min_shares]
+        sides.append({"Side": team_map.get(tok) or (outcomes[idx] if idx < len(outcomes) else tok),
+                      "wallets": len(held), "cash": sum(c for _, c in held), "price": last.get(tok)})
+    tot_w, tot_c = sum(s["wallets"] for s in sides), sum(s["cash"] for s in sides)
+    psum = sum(s["price"] for s in sides) if sides and all(s["price"] is not None for s in sides) else None
+    for s in sides:
+        s["wallet_pct"] = 100 * s["wallets"] / tot_w if tot_w else None
+        s["cash_pct"] = 100 * s["cash"] / tot_c if tot_c else None
+        s["line_pct"] = 100 * s["price"] / psum if (s["price"] is not None and psum) else None
+    return sides, truncated
+
+
+def score_game(ev: dict, market: dict, tz: str = DEFAULT_TZ):
+    """One finished game -> a result row (None when it can't be scored)."""
+    outs = _as_list(market.get("outcomes"))
+    if len(outs) != 2 or {str(o) for o in outs} & {"Yes", "No"}:
+        return None                                      # skip 3-way soccer style Yes/No markets
+    win = market_winner(market)
+    start = event_start(ev)
+    if win is None or start is None:
+        return None
+    sides, truncated = pregame_split(market, start)
+    if len(sides) != 2 or not any(s["cash"] for s in sides):
+        return None
+    money = max(sides, key=lambda s: s["cash"])
+    crowd = max(sides, key=lambda s: s["wallets"])
+    fav = max(sides, key=lambda s: s["line_pct"] if s["line_pct"] is not None else -1)
+    won = sides[win]["Side"]
+    return {
+        "League": ev["_league"]["league"], "Game": ev.get("title"), "Market": market_name(market),
+        "Starts": fmt_local(start, tz), "_start": start, "Pre-game cash $": sum(s["cash"] for s in sides),
+        "Money side": money["Side"], "Money cash %": money["cash_pct"],
+        "Crowd side": crowd["Side"], "Crowd wallets %": crowd["wallet_pct"],
+        "Favorite": fav["Side"] if fav["line_pct"] is not None else "", "Favorite line %": fav["line_pct"],
+        "Winner": won, "Money ≠ crowd": money is not crowd,
+        "Money won": money["Side"] == won, "Crowd won": crowd["Side"] == won,
+        "Favorite won": (fav["Side"] == won) if fav["line_pct"] is not None else None,
+        "Partial trades": truncated,
+    }
+
+
+def day_scorecard(leagues: list, day_start: dt.datetime, day_end: dt.datetime, min_cash: float = 0.0,
+                  market_types=("moneyline",), workers: int = 4, tz: str = DEFAULT_TZ, progress=None):
+    """
+    Score every finished game that started in [day_start, day_end] in the given
+    leagues. Returns (DataFrame, summary dict, report). The summary says whether
+    the day favored the money side or the crowd side, judged on games where the
+    two disagreed (when they agree, both win or lose together).
+    """
+    progress = progress or (lambda d, t, text: None)
+    report = {"leagues": len(leagues), "events": 0, "scored": 0, "errors": []}
+    events = []
+    with ThreadPoolExecutor(8) as ex:
+        futs = [ex.submit(fetch_finished_events, l, day_start, day_end) for l in leagues]
+        for i, f in enumerate(as_completed(futs), start=1):
+            try:
+                evs, errs = f.result()
+                events += evs
+                report["errors"] += errs
+            except Exception as e:
+                report["errors"].append(str(e))
+            progress(i, len(futs), "Finding finished games")
+    report["events"] = len(events)
+
+    tasks = [(ev, m) for ev in events for m in pick_markets(ev, market_types, include_closed=True)]
+    rows = []
+    with ThreadPoolExecutor(workers) as ex:
+        futs = {ex.submit(score_game, ev, m, tz): (ev, m) for ev, m in tasks}
+        for i, f in enumerate(as_completed(futs), start=1):
+            try:
+                r = f.result()
+                if r and r["Pre-game cash $"] >= min_cash:
+                    rows.append(r)
+            except Exception as e:
+                report["errors"].append(f"{futs[f][0].get('title')}: {e}")
+            progress(i, len(futs), "Rebuilding pre-game positions")
+    report["scored"] = len(rows)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df, {}, report
+    df = df.sort_values("_start").reset_index(drop=True)
+    split = df[df["Money ≠ crowd"]]
+    fav = df["Favorite won"].dropna()
+    summary = {
+        "games": len(df), "split_games": len(split),
+        "money_won_split": int(split["Money won"].sum()), "crowd_won_split": int(split["Crowd won"].sum()),
+        "money_win_rate": 100 * df["Money won"].mean(), "crowd_win_rate": 100 * df["Crowd won"].mean(),
+        "favorite_win_rate": 100 * fav.mean() if len(fav) else None,
+    }
+    m, c = summary["money_won_split"], summary["crowd_won_split"]
+    if len(split) < 3:
+        summary["verdict"] = "Too few games where the money and the crowd disagreed to call the day."
+    elif m > c:
+        summary["verdict"] = f"Money-side day: in the {len(split)} games where they disagreed, the money side won {m} and the crowd side won {c}."
+    elif c > m:
+        summary["verdict"] = f"Crowd-side day: in the {len(split)} games where they disagreed, the crowd side won {c} and the money side won {m}."
+    else:
+        summary["verdict"] = f"Split day: in the {len(split)} games where they disagreed, each side won {m}."
+    return df, summary, report
